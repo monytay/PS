@@ -41,6 +41,7 @@ def control_28(parsedFiles):
                         return True
     return False
 
+#Method to check public access
 def control_314(parsedFiles):
     for path, data in parsedFiles:
         for block in data.get("resource", []):
@@ -51,17 +52,51 @@ def control_314(parsedFiles):
                     public_policy = unwrap(args.get("block_public_policy"))
                     ignore_acls = unwrap(args.get("ignore_public_acls"))
                     restrict = unwrap(args.get("restrict_public_buckets"))
+                    #Checking all parameters
                     if public_acls == True and public_policy == True and ignore_acls == True and restrict == True:
                         return True
     return False
+
+#Method for confirming DB encryption
+def control_321(parsedFiles):
+    findings = []
+    for path, data in parsedFiles:
+        for block in data.get("resource", []):
+            #Method to confirm encryption of single rds instances
+            if "aws_db_instance" in block:
+                db = block["aws_db_instance"]
+                for database_name, args in db.items():
+                    encrypted = unwrap(args.get("storage_encrypted"))
+                    if encrypted != True:
+                        findings.append({
+                            "file": path,
+                            "resource_type": "aws_db_instance",
+                            "resource_name": database_name
+                        })
+            #Method to confirm encryption of cluster rds instances or Aurora
+            if "aws_rds_cluster" in block:
+                for database_name, args in block["aws_rds_cluster"].items():
+                    encrypted = unwrap(args.get("storage_encrypted"))
+                    if encrypted != True:
+                        findings.append({
+                            "file": path,
+                            "resource_type":"aws_rds_cluster",
+                            "resource_name": database_name
+                        })
+    return findings
 
 def ScannerApp(filePath):
     # Parse the file using our method so we can run our checks
     parsedFiles = parse_all(filePath)
     #We will record the specific control in the results and add additional information
     results = {
-        "CIS 2.8": control_28(parsedFiles)
-        "CIS 3.1.4": control_314(parsedFiles)
-    }
-
+        "CIS 2.8": control_28(parsedFiles),
+        "CIS 3.1.4": control_314(parsedFiles),
+        "CIS 3.2.1": control_321(parsedFiles)
+        }
     
+    return results
+
+if __name__ == "__main__":
+    repo = sys.argv[1]
+    print(ScannerApp(repo))
