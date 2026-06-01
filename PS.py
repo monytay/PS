@@ -30,32 +30,61 @@ def unwrap(value):
         return value[0] if value else None
     return value
 
+#Method ensures length of password for IAM account is at least 14 characters long
 def control_28(parsedFiles):
+    findings = []
     for path, data in parsedFiles:
         for block in data.get("resource",[]):
             if "aws_iam_account_password_policy" in block:
                 policy = block["aws_iam_account_password_policy"]
                 for resource_name, args in policy.items():
                     length = unwrap(args.get("minimum_password_length"))
-                    if length is not None and length >= 14:
-                        return True
-    return False
+                    if length is None or length < 14:
+                        findings.append({
+                            "file":path,
+                            "resource_type":"aws_iam_account_password_policy",
+                            "resource_name":resource_name,
+                            "reason":f"minimum_password_length was {length}, required >= 14"
+                        })
+    return findings
 
 #Method to check public access
 def control_314(parsedFiles):
+    findings = []
     for path, data in parsedFiles:
         for block in data.get("resource", []):
+
             if "aws_s3_bucket_public_access_block" in block:
                 policy = block["aws_s3_bucket_public_access_block"]
-                for rescource_name, args in policy.items():
+                for resource_name, args in policy.items():
                     public_acls = unwrap(args.get("block_public_acls"))
                     public_policy = unwrap(args.get("block_public_policy"))
                     ignore_acls = unwrap(args.get("ignore_public_acls"))
                     restrict = unwrap(args.get("restrict_public_buckets"))
                     #Checking all parameters
-                    if public_acls == True and public_policy == True and ignore_acls == True and restrict == True:
-                        return True
-    return False
+                    if public_acls != True or public_policy != True or ignore_acls != True or restrict != True:
+                        findings.append({
+                            "file": path,
+                            "resource_type":"aws_s3_bucket_public_access_block",
+                            "resource_name":resource_name
+                        })
+        
+            if "aws_s3_account_public_access_block" in block:
+                policy = block["aws_s3_account_public_access_block"]
+                for resource_name, args in policy.items():
+                    public_acls = unwrap(args.get("block_public_acls"))
+                    public_policy = unwrap(args.get("block_public_policy"))
+                    ignore_acls = unwrap(args.get("ignore_public_acls"))
+                    restrict = unwrap(args.get("restrict_public_buckets"))
+                    #Checking all the parameters
+                    if public_acls != True or public_policy != True or ignore_acls != True or restrict != True:
+                        findings.append({
+                            "file": path,
+                            "resource_type":"aws_s3_account_public_access_block",
+                            "resource_name":resource_name
+                        })
+
+    return findings
 
 #Method for confirming DB encryption
 def control_321(parsedFiles):
@@ -90,6 +119,7 @@ def control_323(parsedFiles):
     findings = []
     for path, data in parsedFiles:
         for block in data.get("resource", []):
+
             if "aws_db_instance" in block:
                 db = block["aws_db_instance"]
                 for database_name, args in db.items():
@@ -98,7 +128,20 @@ def control_323(parsedFiles):
                         findings.append({
                             "file":path,
                             "resource_type":"aws_db_instance",
-                            "resource_name": database_name
+                            "resource_name": database_name,
+                            "reason":f"Public access was {access}, CIS requires False or unset"
+                        })
+            
+            if "aws_rds_cluster_instance" in block:
+                db = block["aws_rds_cluster_instance"]
+                for database_name, args in db.items():
+                    access = unwrap(args.get("publicly_accessible"))
+                    if access == True:
+                        findings.append({
+                            "file":path,
+                            "resource_type":"aws_rds_cluster_instance",
+                            "resource_name":database_name,
+                            "reason":f"Public access was {access}, CIS requires False or unset"
                         })
     return findings
                     
