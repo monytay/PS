@@ -85,6 +85,41 @@ def control_321(parsedFiles):
                         })
     return findings
 
+#Method for ensuring no public access is granted
+def control_323(parsedFiles):
+    findings = []
+    for path, data in parsedFiles:
+        for block in data.get("resource", []):
+            if "aws_db_instance" in block:
+                db = block["aws_db_instance"]
+                for database_name, args in db.items():
+                    access = unwrap(args.get("publicly_accessible"))
+                    if access == True:
+                        findings.append({
+                            "file":path,
+                            "resource_type":"aws_db_instance",
+                            "resource_name": database_name
+                        })
+    return findings
+                    
+#Method for ensuring Cloudtrail is enabled in all regions
+def control_41(parsedFiles):
+    findings = []
+    for path, data in parsedFiles:
+        for block in data.get("resource", []):
+            if "aws_cloudtrail" in block:
+                cloudTrail = block["aws_cloudtrail"]
+                for cloudTrail_name, args in cloudTrail.items():
+                    regions = unwrap(args.get("is_multi_region_trail"))
+                    logging = unwrap(args.get("enable_logging"))
+                    if regions != True or logging == False:
+                        findings.append({
+                            "file":path,
+                            "resource_type":"aws_cloudtrail",
+                            "resource_name": cloudTrail_name
+                        })
+    return findings
+
 def ScannerApp(filePath):
     # Parse the file using our method so we can run our checks
     parsedFiles = parse_all(filePath)
@@ -92,7 +127,9 @@ def ScannerApp(filePath):
     results = {
         "CIS 2.8": control_28(parsedFiles),
         "CIS 3.1.4": control_314(parsedFiles),
-        "CIS 3.2.1": control_321(parsedFiles)
+        "CIS 3.2.1": control_321(parsedFiles),
+        "CIS 3.2.3": control_323(parsedFiles),
+        "CIS 4.1": control_41(parsedFiles)
         }
     
     return results
