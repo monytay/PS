@@ -1,6 +1,7 @@
 import hcl2
 import os
 import sys
+from pprint import pprint
 
 # We use os.walk to collect all terraform files in all directories and subdirectories
 def collect_tf_files(repo_path):
@@ -163,20 +164,130 @@ def control_41(parsedFiles):
                         })
     return findings
 
+def control_63(parsedFiles):
+    findings = []
+    ADMIN_PORTS = [22, 3389]
+    OPEN_CIDRS_V4 = ["0.0.0.0/0"]
+    OPEN_CIDRS_V6 = ["::/0"]
+    OPEN_PROTOCOLS = ["tcp", "udp", "-1"]
+
+    for path, data in parsedFiles:
+        for block in data.get("resource", []):
+
+            #Pattern 1: ingress block for security grpups
+            if "aws_security_group" in block:
+                sg = block["aws_security_group"]
+                for sg_name, args in sg.items():
+                    ingress_rule = args.get("ingress", [])
+                    for rule in ingress_rule:
+                        violation = check_legacy_rule(rule)
+                        if violation:
+                            findings.append({
+                                "file": path,
+                                "resource_type": "aws_security_group(inline ingress)",
+                                "resource_name": sg_name,
+                                "reason": violation
+                            })
+
+            #Pattern 2: Security group rule
+            if "aws_security_group_rule" in block:
+                rules = block["aws_security_group_rule"]
+                for rule_name, args in rules.items():
+                    rule_type = unwrap(args.get("type"))
+                    if rule_type != "ingress":
+                        continue
+                    violation = check_legacy_rule(args)
+                    if violation:
+                            findings.append({
+                                "file": path,
+                                "resource_type": "aws_security_group_rule",
+                                "resource_name": rule_name,
+                                "reason": violation
+                            })
+
+            #Pattern 3: modern aws_vpc_security_group_ingress_rule
+            if "aws_vpc_security_group_ingress_rule" in block:
+                rules = block["aws_vpc_security_group_ingress_rule"]
+                for rule_name, args in rules.items():
+                    violation = check_modern_rule(args)
+                    if violation:
+                            findings.append({
+                                "file": path,
+                                "resource_type": "aws_vpc_security_group_ingress_rule",
+                                "resource_name": rule_name,
+                                "reason": violation
+                            })
+    return findings
+
+#Used in Pattern 1 and 2
+def check_legacy_rule(rule):
+    from_port = unwrap(rule.get("from_port"))
+    to_port = unwrap(rule.get("to_port"))
+    protocol = unwrap(rule.get("protocol"))
+    cidr_blocks = rule.get("cidr_blocks") or []
+    ipv6_cidr_blocks = rule.get("ipv6_cidr_blocks") or []
+
+    #Made to handle potential double wrapping from hcl2
+    if cidr_blocks and isinstance(cidr_blocks[0], list):
+        cidr_blocks = cidr_blocks[0]
+    if ipv6_cidr_blocks and isinstance(ipv6_cidr_blocks[0], list):
+        ipv6_cidr_blocks = ipv6_cidr_blocks[0]
+    
+    return evaluate(from_port, to_port, protocol, cidr_blocks, ipv6_cidr_blocks)
+
+#Used in Patern 3
+def check_modern_rule(rule):
+    from_port = unwrap(rule.get("from_port"))
+    to_port = unwrap(rule.get("to_port"))
+    protocol = unwrap(rule.get("ip_protocol"))
+    cidr_ipv4 = unwrap(rule.get("cidr_ipv4"))
+    cidr_ipv6 = unwrap(rule.get("cidr_ipv6"))
+
+    cidr_blocks = [cidr_ipv4] if cidr_ipv4 else []
+    ipv6_cidr_blocks = [cidr_ipv6] if cidr_ipv6 else []
+
+    return evaluate(from_port, to_port, protocol, cidr_blocks, ipv6_cidr_blocks)
+
+def evaluate(from_port, to_port, protocol, cidr_v4_list, cidr_v6_list):
+    if from_port is None or to_port is None:
+        return None
+    
+    if str(protocol).lower() not in ["tcp", "udp", "-1"]:
+        return None
+    
+    hit_ports = []
+    for port in [22, 3389]:
+        if from_port <= port <= to_port:
+            hit_ports.append(port)
+    if not hit_ports:
+        return None
+    
+    if "0.0.0.0/0" in cidr_v4_list:
+        return f"Port(s) {hit_ports} open to 0.0.0.0/0 (protocol = {protocol})"
+    if "::/0" in cidr_v6_list:
+        return f"Port(s) {hit_ports} open to ::/0 (protocol = {protocol})"
+
+    return None
+
+
 def ScannerApp(filePath):
     # Parse the file using our method so we can run our checks
     parsedFiles = parse_all(filePath)
+    pprint(parsedFiles)
     #We will record the specific control in the results and add additional information
     results = {
         "CIS 2.8": control_28(parsedFiles),
         "CIS 3.1.4": control_314(parsedFiles),
         "CIS 3.2.1": control_321(parsedFiles),
         "CIS 3.2.3": control_323(parsedFiles),
-        "CIS 4.1": control_41(parsedFiles)
+        "CIS 4.1": control_41(parsedFiles),
+        "CIS 6.3": control_63(parsedFiles),
         }
     
     return results
 
 if __name__ == "__main__":
     repo = sys.argv[1]
-    print(ScannerApp(repo))
+    results = ScannerApp(repo)
+    for control, findings in results.items():
+        print(f"{control}: {findings}")
