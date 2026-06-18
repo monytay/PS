@@ -3,6 +3,8 @@ import os
 import sys
 from pprint import pprint
 
+UNKNOWN = "UNKNOWN"
+
 # We use os.walk to collect all terraform files in all directories and subdirectories
 def collect_tf_files(repo_path):
     tf_files = []
@@ -12,11 +14,19 @@ def collect_tf_files(repo_path):
                 tf_files.append(os.path.join(root,filename))
     return tf_files
 
+# Cleaning extra '' and ""
+def clean_keys(obj):
+    if isinstance(obj, dict):
+        return {k.strip('"'): clean_keys(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [clean_keys(i) for i in obj]
+    return obj
+
 # we parse the data into a python dictionary first with hcl2 library
 def parse(filePlaceholder):
     with open(filePlaceholder, 'r') as f:
         data = hcl2.load(f)
-    return data
+    return clean_keys(data)
 
 # we utilize the previous function to parse all .tf files and add them to the same list of data
 def parse_all(repo_path):
@@ -28,7 +38,14 @@ def parse_all(repo_path):
 # Helper function for unwraping HCL code
 def unwrap(value):
     if isinstance(value, list):
-        return value[0] if value else None
+        value = value[0] if value else None
+    if isinstance(value, str) and (
+        value.startswith("${var.") or
+        value.startswith("var.") or
+        value.startswith("${local.") or
+        value.startswith("local.")
+    ):
+        return UNKNOWN
     return value
 
 #Method ensures length of password for IAM account is at least 14 characters long
@@ -273,7 +290,7 @@ def evaluate(from_port, to_port, protocol, cidr_v4_list, cidr_v6_list):
 def ScannerApp(filePath):
     # Parse the file using our method so we can run our checks
     parsedFiles = parse_all(filePath)
-    pprint(parsedFiles)
+    print(parsedFiles)
     #We will record the specific control in the results and add additional information
     results = {
         "CIS 2.8": control_28(parsedFiles),
