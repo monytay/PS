@@ -20,6 +20,8 @@ def clean_keys(obj):
         return {k.strip('"'): clean_keys(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [clean_keys(i) for i in obj]
+    if isinstance(obj,str):
+        return obj.strip('"')
     return obj
 
 # we parse the data into a python dictionary first with hcl2 library
@@ -51,24 +53,33 @@ def unwrap(value):
 #Method ensures length of password for IAM account is at least 14 characters long
 def control_28(parsedFiles):
     findings = []
+    unknowns = []
     for path, data in parsedFiles:
         for block in data.get("resource",[]):
             if "aws_iam_account_password_policy" in block:
                 policy = block["aws_iam_account_password_policy"]
                 for resource_name, args in policy.items():
                     length = unwrap(args.get("minimum_password_length"))
-                    if length is None or length < 14:
+                    if length == UNKNOWN:
+                        unknowns.append({
+                            "file" : path,
+                            "resource_type" : "aws_iam_account_password_policy",
+                            "resource_name" : resource_name,
+                            "reason" : f"The value is recorded in a variable or variable file"
+                        })
+                    elif length is None or length < 14:
                         findings.append({
                             "file":path,
                             "resource_type":"aws_iam_account_password_policy",
                             "resource_name":resource_name,
                             "reason":f"minimum_password_length was {length}, required >= 14"
                         })
-    return findings
+    return findings, unknowns
 
 #Method to check public access
 def control_314(parsedFiles):
     findings = []
+    unknowns = []
     for path, data in parsedFiles:
         for block in data.get("resource", []):
 
@@ -80,13 +91,29 @@ def control_314(parsedFiles):
                     ignore_acls = unwrap(args.get("ignore_public_acls"))
                     restrict = unwrap(args.get("restrict_public_buckets"))
                     #Checking all parameters
-                    if public_acls != True or public_policy != True or ignore_acls != True or restrict != True:
+                    unknown_att = [
+                        name for name, val in [
+                            ("block_public_acls", public_acls),
+                            ("block_public_policy", public_policy),
+                            ("ignore_public_acls", ignore_acls),
+                            ("restrict_public_buckets", restrict)
+                        ] if val == UNKNOWN
+                    ]
+                    if unknown_att:
+                        unknowns.append({
+                            "file" : path,
+                            "resource_type" : "aws_s3_bucket_public_access_block",
+                            "resource_name" : resource_name,
+                            "attributes" : unknown_att,
+                            "reason" : "The value is recorded in a variable or variable file"
+                        })
+                    elif public_acls != True or public_policy != True or ignore_acls != True or restrict != True:
                         findings.append({
                             "file": path,
                             "resource_type":"aws_s3_bucket_public_access_block",
                             "resource_name":resource_name
                         })
-        
+                
             if "aws_s3_account_public_access_block" in block:
                 policy = block["aws_s3_account_public_access_block"]
                 for resource_name, args in policy.items():
@@ -94,19 +121,35 @@ def control_314(parsedFiles):
                     public_policy = unwrap(args.get("block_public_policy"))
                     ignore_acls = unwrap(args.get("ignore_public_acls"))
                     restrict = unwrap(args.get("restrict_public_buckets"))
-                    #Checking all the parameters
-                    if public_acls != True or public_policy != True or ignore_acls != True or restrict != True:
+                    #Checking all parameters
+                    unknown_att = [
+                        name for name, val in [
+                            ("block_public_acls", public_acls),
+                            ("block_public_policy", public_policy),
+                            ("ignore_public_acls", ignore_acls),
+                            ("restrict_public_buckets", restrict)
+                        ] if val == UNKNOWN
+                    ]
+                    if unknown_att:
+                        unknowns.append({
+                            "file" : path,
+                            "resource_type" : "aws_s3_account_public_access_block",
+                            "resource_name" : resource_name,
+                            "attributes" : unknown_att,
+                            "reason" : "The value is recorded in a variable or variable file"
+                        })
+                    elif public_acls != True or public_policy != True or ignore_acls != True or restrict != True:
                         findings.append({
                             "file": path,
                             "resource_type":"aws_s3_account_public_access_block",
                             "resource_name":resource_name
                         })
-
-    return findings
+    return findings, unknowns
 
 #Method for confirming DB encryption
 def control_321(parsedFiles):
     findings = []
+    unknowns = []
     for path, data in parsedFiles:
         for block in data.get("resource", []):
             #Method to confirm encryption of single rds instances
@@ -114,7 +157,14 @@ def control_321(parsedFiles):
                 db = block["aws_db_instance"]
                 for database_name, args in db.items():
                     encrypted = unwrap(args.get("storage_encrypted"))
-                    if encrypted != True:
+                    if encrypted == UNKNOWN:
+                        unknowns.append({
+                            "file": path,
+                            "resource_type": "aws_db_instance",
+                            "resource_name": database_name,
+                            "reason" : "The value is recorded in a variable or variable file"
+                        })
+                    elif encrypted != True:
                         findings.append({
                             "file": path,
                             "resource_type": "aws_db_instance",
@@ -124,17 +174,25 @@ def control_321(parsedFiles):
             if "aws_rds_cluster" in block:
                 for database_name, args in block["aws_rds_cluster"].items():
                     encrypted = unwrap(args.get("storage_encrypted"))
-                    if encrypted != True:
+                    if encrypted == UNKNOWN:
+                        unknowns.append({
+                            "file": path,
+                            "resource_type": "aws_rds_cluster",
+                            "resource_name": database_name,
+                            "reason" : "The value is recorded in a variable or variable file"
+                        })
+                    elif encrypted != True:
                         findings.append({
                             "file": path,
                             "resource_type":"aws_rds_cluster",
                             "resource_name": database_name
                         })
-    return findings
+    return findings, unknowns
 
 #Method for ensuring no public access is granted
 def control_323(parsedFiles):
     findings = []
+    unknowns = []
     for path, data in parsedFiles:
         for block in data.get("resource", []):
 
@@ -142,7 +200,14 @@ def control_323(parsedFiles):
                 db = block["aws_db_instance"]
                 for database_name, args in db.items():
                     access = unwrap(args.get("publicly_accessible"))
-                    if access == True:
+                    if access == UNKNOWN:
+                        unknowns.append({
+                            "file":path,
+                            "resource_type":"aws_db_instance",
+                            "resource_name": database_name,
+                            "reason":f"The value is recorded in a variable or variable file"
+                        })
+                    elif access == True:
                         findings.append({
                             "file":path,
                             "resource_type":"aws_db_instance",
@@ -154,18 +219,26 @@ def control_323(parsedFiles):
                 db = block["aws_rds_cluster_instance"]
                 for database_name, args in db.items():
                     access = unwrap(args.get("publicly_accessible"))
-                    if access == True:
+                    if access == UNKNOWN:
+                        unknowns.append({
+                            "file":path,
+                            "resource_type":"aws_rds_cluster_instance",
+                            "resource_name": database_name,
+                            "reason":f"The value is recorded in a variable or variable file"
+                        })
+                    elif access == True:
                         findings.append({
                             "file":path,
                             "resource_type":"aws_rds_cluster_instance",
                             "resource_name":database_name,
                             "reason":f"Public access was {access}, CIS requires False or unset"
                         })
-    return findings
+    return findings, unknowns
                     
 #Method for ensuring Cloudtrail is enabled in all regions
 def control_41(parsedFiles):
     findings = []
+    unknowns = []
     for path, data in parsedFiles:
         for block in data.get("resource", []):
             if "aws_cloudtrail" in block:
@@ -173,16 +246,24 @@ def control_41(parsedFiles):
                 for cloudTrail_name, args in cloudTrail.items():
                     regions = unwrap(args.get("is_multi_region_trail"))
                     logging = unwrap(args.get("enable_logging"))
-                    if regions != True or logging == False:
+                    if regions == UNKNOWN or logging == UNKNOWN:
+                        unknowns.append({
+                            "file":path,
+                            "resource_type":"aws_cloudtrail",
+                            "resource_name": cloudTrail_name,
+                            "reason" : "The value is recorded in a variable or variable file"
+                        })
+                    elif regions != True or logging == False:
                         findings.append({
                             "file":path,
                             "resource_type":"aws_cloudtrail",
                             "resource_name": cloudTrail_name
                         })
-    return findings
+    return findings, unknowns
 
 def control_63(parsedFiles):
     findings = []
+    unknowns = []
     ADMIN_PORTS = [22, 3389]
     OPEN_CIDRS_V4 = ["0.0.0.0/0"]
     OPEN_CIDRS_V6 = ["::/0"]
@@ -198,7 +279,14 @@ def control_63(parsedFiles):
                     ingress_rule = args.get("ingress", [])
                     for rule in ingress_rule:
                         violation = check_legacy_rule(rule)
-                        if violation:
+                        if violation == UNKNOWN:
+                            unknowns.append({
+                                "file": path,
+                                "resource_type": "aws_security_group(inline ingress)",
+                                "resource_name": sg_name,
+                                "reason": "The value is recorded in a variable or variable file"
+                            })
+                        elif violation:
                             findings.append({
                                 "file": path,
                                 "resource_type": "aws_security_group(inline ingress)",
@@ -214,7 +302,14 @@ def control_63(parsedFiles):
                     if rule_type != "ingress":
                         continue
                     violation = check_legacy_rule(args)
-                    if violation:
+                    if violation == UNKNOWN:
+                        unknowns.append({
+                            "file": path,
+                            "resource_type": "aws_security_group_rule",
+                            "resource_name": rule_name,
+                            "reason": "The value is recorded in a variable or variable file"
+                        })
+                    elif violation:
                             findings.append({
                                 "file": path,
                                 "resource_type": "aws_security_group_rule",
@@ -227,14 +322,21 @@ def control_63(parsedFiles):
                 rules = block["aws_vpc_security_group_ingress_rule"]
                 for rule_name, args in rules.items():
                     violation = check_modern_rule(args)
-                    if violation:
+                    if violation == UNKNOWN:
+                        unknowns.append({
+                            "file": path,
+                                "resource_type": "aws_vpc_security_group_ingress_rule",
+                                "resource_name": rule_name,
+                                "reason": "The value is recorded in a variable or variable file"
+                        })
+                    elif violation:
                             findings.append({
                                 "file": path,
                                 "resource_type": "aws_vpc_security_group_ingress_rule",
                                 "resource_name": rule_name,
                                 "reason": violation
                             })
-    return findings
+    return findings, unknowns
 
 #Used in Pattern 1 and 2
 def check_legacy_rule(rule):
@@ -290,21 +392,43 @@ def evaluate(from_port, to_port, protocol, cidr_v4_list, cidr_v6_list):
 def ScannerApp(filePath):
     # Parse the file using our method so we can run our checks
     parsedFiles = parse_all(filePath)
-    print(parsedFiles)
+    results = {}
+    all_unknowns = {}
     #We will record the specific control in the results and add additional information
-    results = {
-        "CIS 2.8": control_28(parsedFiles),
-        "CIS 3.1.4": control_314(parsedFiles),
-        "CIS 3.2.1": control_321(parsedFiles),
-        "CIS 3.2.3": control_323(parsedFiles),
-        "CIS 4.1": control_41(parsedFiles),
-        "CIS 6.3": control_63(parsedFiles),
-        }
+    for control, func in [
+        ("CIS 2.8", control_28),
+        ("CIS 3.1.4", control_314),
+        ("CIS 3.2.1", control_321),
+        ("CIS 3.2.3", control_323),
+        ("CIS 4.1", control_41),
+        ("CIS 6.3", control_63)
+    ]:
+        findings, unknowns = func(parsedFiles)
+        results[control] = findings
+        all_unknowns[control] = unknowns
     
-    return results
+    return results, all_unknowns
 
 if __name__ == "__main__":
     repo = sys.argv[1]
-    results = ScannerApp(repo)
-    for control, findings in results.items():
-        print(f"{control}: {findings}")
+    results, all_unknowns = ScannerApp(repo)
+    
+    total_vulnerabilities = 0
+    total_unknown = 0
+    
+    for control in results:
+        findings = results[control]
+        unknowns = all_unknowns[control]
+        
+        if findings or unknowns:
+            print(f"\n{control}:")
+            for finding in findings:
+                total_vulnerabilities += 1
+                print(f"  [VULNERABLE] {finding['resource_type']} - {finding['resource_name']}: {finding.get('reason', 'Non-compliant')}")
+            for unknown in unknowns:
+                total_unknown += 1
+                print(f"  [UNKNOWN] {unknown['resource_type']} - {unknown['resource_name']}: {unknown['reason']}")
+    
+    print(f"\n--- SCAN SUMMARY ---")
+    print(f"Vulnerabilities found : {total_vulnerabilities}")
+    print(f"Variables found       : {total_unknown}")
