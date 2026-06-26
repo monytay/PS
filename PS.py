@@ -253,7 +253,7 @@ def control_41(parsedFiles):
                             "resource_name": cloudTrail_name,
                             "reason" : "The value is recorded in a variable or variable file"
                         })
-                    elif regions != True or logging == False:
+                    elif regions != True or logging != True:
                         findings.append({
                             "file":path,
                             "resource_type":"aws_cloudtrail",
