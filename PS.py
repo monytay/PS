@@ -34,7 +34,10 @@ def parse(filePlaceholder):
 def parse_all(repo_path):
     parsed = []
     for path in collect_tf_files(repo_path):
-        parsed.append((path,parse(path)))
+        try:
+            parsed.append((path,parse(path)))
+        except Exception:
+            pass
     return parsed
 
 # Helper function for unwraping HCL code
