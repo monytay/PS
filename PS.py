@@ -374,6 +374,12 @@ def evaluate(from_port, to_port, protocol, cidr_v4_list, cidr_v6_list):
     if from_port is None or to_port is None:
         return None
     
+    try:
+        from_port = int(from_port)
+        to_port = int(to_port)
+    except (ValueError, TypeError):
+        return None
+    
     if str(protocol).lower() not in ["tcp", "udp", "-1"]:
         return None
     
