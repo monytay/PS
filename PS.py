@@ -51,6 +51,10 @@ def unwrap(value):
         value.startswith("local.")
     ):
         return UNKNOWN
+    if isinstance(value, str) and value.lower() == "true":
+        return True
+    if isinstance(value, str) and value.lower() == "false":
+        return False
     return value
 
 #Method ensures length of password for IAM account is at least 14 characters long
