@@ -1,7 +1,6 @@
 import hcl2
 import os
 import sys
-from pprint import pprint
 
 UNKNOWN = "UNKNOWN"
 
@@ -98,28 +97,29 @@ def control_314(parsedFiles):
                     ignore_acls = unwrap(args.get("ignore_public_acls"))
                     restrict = unwrap(args.get("restrict_public_buckets"))
                     #Checking all parameters
-                    unknown_att = [
-                        name for name, val in [
-                            ("block_public_acls", public_acls),
-                            ("block_public_policy", public_policy),
-                            ("ignore_public_acls", ignore_acls),
-                            ("restrict_public_buckets", restrict)
-                        ] if val == UNKNOWN
+                    attributes = [
+                        ("block_public_acls", public_acls),
+                        ("block_public_policy", public_policy),
+                        ("ignore_public_acls", ignore_acls),
+                        ("restrict_public_buckets", restrict)
                     ]
-                    if unknown_att:
-                        unknowns.append({
-                            "file" : path,
-                            "resource_type" : "aws_s3_bucket_public_access_block",
-                            "resource_name" : resource_name,
-                            "attributes" : unknown_att,
-                            "reason" : "The value is recorded in a variable or variable file"
-                        })
-                    elif public_acls != True or public_policy != True or ignore_acls != True or restrict != True:
-                        findings.append({
-                            "file": path,
-                            "resource_type":"aws_s3_bucket_public_access_block",
-                            "resource_name":resource_name
-                        })
+                    for attribute_name, value in attributes:
+                        if value == UNKNOWN:
+                            unknowns.append({
+                                "file": path,
+                                "resource_type": "aws_s3_bucket_public_access_block",
+                                "resource_name": resource_name,
+                                "attribute": attribute_name,
+                                "reason": "The value is recorded in a variable or variable file"
+                            })
+                        elif value != True:
+                            findings.append({
+                                "file": path,
+                                "resource_type": "aws_s3_bucket_public_access_block",
+                                "resource_name": resource_name,
+                                "attribute": attribute_name,
+                                "reason": f"{attribute_name} was {value}, required True"
+                            })
                 
             if "aws_s3_account_public_access_block" in block:
                 policy = block["aws_s3_account_public_access_block"]
@@ -129,28 +129,29 @@ def control_314(parsedFiles):
                     ignore_acls = unwrap(args.get("ignore_public_acls"))
                     restrict = unwrap(args.get("restrict_public_buckets"))
                     #Checking all parameters
-                    unknown_att = [
-                        name for name, val in [
-                            ("block_public_acls", public_acls),
-                            ("block_public_policy", public_policy),
-                            ("ignore_public_acls", ignore_acls),
-                            ("restrict_public_buckets", restrict)
-                        ] if val == UNKNOWN
+                    attributes = [
+                        ("block_public_acls", public_acls),
+                        ("block_public_policy", public_policy),
+                        ("ignore_public_acls", ignore_acls),
+                        ("restrict_public_buckets", restrict)
                     ]
-                    if unknown_att:
-                        unknowns.append({
-                            "file" : path,
-                            "resource_type" : "aws_s3_account_public_access_block",
-                            "resource_name" : resource_name,
-                            "attributes" : unknown_att,
-                            "reason" : "The value is recorded in a variable or variable file"
-                        })
-                    elif public_acls != True or public_policy != True or ignore_acls != True or restrict != True:
-                        findings.append({
-                            "file": path,
-                            "resource_type":"aws_s3_account_public_access_block",
-                            "resource_name":resource_name
-                        })
+                    for attribute_name, value in attributes:
+                        if value == UNKNOWN:
+                            unknowns.append({
+                                "file": path,
+                                "resource_type": "aws_s3_account_public_access_block",
+                                "resource_name": resource_name,
+                                "attribute": attribute_name,
+                                "reason": "The value is recorded in a variable or variable file"
+                            })
+                        elif value != True:
+                            findings.append({
+                                "file": path,
+                                "resource_type": "aws_s3_account_public_access_block",
+                                "resource_name": resource_name,
+                                "attribute": attribute_name,
+                                "reason": f"{attribute_name} was {value}, required True"
+                            })
     return findings, unknowns
 
 #Method for confirming DB encryption
