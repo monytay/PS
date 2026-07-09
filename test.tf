@@ -23,3 +23,16 @@ resource "aws_vpc_security_group_ingress_rule" "bad_modern" {
   ip_protocol       = "tcp"
   cidr_ipv4         = "0.0.0.0/0"
 }
+resource "aws_s3_bucket_public_access_block" "open_bucket" {
+  bucket                  = "test-bucket"
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_rds_cluster" "unencrypted_cluster" {
+  cluster_identifier  = "test-cluster"
+  engine              = "aurora-postgresql"
+  storage_encrypted   = false
+}
