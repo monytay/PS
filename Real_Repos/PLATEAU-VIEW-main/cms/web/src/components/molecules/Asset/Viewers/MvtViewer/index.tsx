@@ -1,0 +1,32 @@
+import { Viewer as CesiumViewer } from "cesium";
+import { useCallback, useState } from "react";
+
+import ResiumViewer from "@reearth-cms/components/atoms/ResiumViewer";
+import { WorkspaceSettings } from "@reearth-cms/components/molecules/Workspace/types";
+
+import { Imagery, Property } from "./Imagery";
+
+type Props = {
+  url: string;
+  workspaceSettings: WorkspaceSettings;
+  onGetViewer: (viewer?: CesiumViewer) => void;
+};
+
+const MvtViewer: React.FC<Props> = ({ url, workspaceSettings, onGetViewer }) => {
+  const [properties, setProperties] = useState<Property>();
+
+  const handleProperties = useCallback((prop: Property) => {
+    setProperties(prop && typeof prop === "object" ? prop : undefined);
+  }, []);
+
+  return (
+    <ResiumViewer
+      onGetViewer={onGetViewer}
+      properties={properties}
+      workspaceSettings={workspaceSettings}>
+      <Imagery url={url} handleProperties={handleProperties} />
+    </ResiumViewer>
+  );
+};
+
+export default MvtViewer;

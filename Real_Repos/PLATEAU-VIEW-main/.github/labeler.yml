@@ -1,0 +1,12 @@
+plugin:
+  - changed-files:
+    - any-glob-to-any-file: web/**/*
+server:
+  - changed-files:
+    - any-glob-to-any-file: server/**/*
+terraform:
+  - changed-files:
+    - any-glob-to-any-file: terraform/**/*
+ci:
+  - changed-files:
+    - any-glob-to-any-file: .github/workflows/**

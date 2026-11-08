@@ -1,0 +1,396 @@
+name: 🌊 Deploy Re:earth Flow Development Environment
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      only_policies:
+        description: "Run only update-policies and deploy-cerbos jobs"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+env:
+  FLOW_REPO: reearth/reearth-flow
+  FLOW_BRANCH: plateau5
+
+  API_IMAGE_NAME_GHCR: ghcr.io/eukarya-inc/plateau-view/reearth-flow-api:latest
+  API_IMAGE_NAME_GCP: asia-northeast1-docker.pkg.dev/reearth-plateau-dev/reearth-plateau/reearth-flow-api:latest
+
+  SUBSCRIBER_IMAGE_NAME_GHCR: ghcr.io/eukarya-inc/plateau-view/reearth-flow-subscriber:latest
+  SUBSCRIBER_IMAGE_NAME_GCP: asia-northeast1-docker.pkg.dev/reearth-plateau-dev/reearth-plateau/reearth-flow-subscriber:latest
+
+  WEB_IMAGE_NAME_GHCR: ghcr.io/eukarya-inc/plateau-view/reearth-flow-web:latest
+  WEB_IMAGE_NAME_GCP: asia-northeast1-docker.pkg.dev/reearth-plateau-dev/reearth-plateau/reearth-flow-web:latest
+
+  WS_IMAGE_NAME_GHCR: ghcr.io/eukarya-inc/plateau-view/reearth-flow-websocket:latest
+  WS_IMAGE_NAME_GCP: asia-northeast1-docker.pkg.dev/reearth-plateau-dev/reearth-plateau/reearth-flow-websocket:latest
+
+  WORKER_IMAGE_NAME_GHCR: ghcr.io/eukarya-inc/plateau-view/reearth-flow-worker:latest
+  WORKER_IMAGE_NAME_GCP: asia-northeast1-docker.pkg.dev/reearth-plateau-dev/reearth-plateau/reearth-flow-worker:latest
+
+  CERBOS_IMAGE_NAME: cerbos/cerbos:0.40.0
+  CERBOS_BUCKET_NAME_PLATEAU_DEV: gs://cerbos-policy-reearth-plateau-dev
+
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  deploy_api:
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    if: ${{ inputs.only_policies != 'true' && github.event.repository.full_name == 'eukarya-inc/PLATEAU-VIEW' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ env.FLOW_REPO }}
+          ref: ${{ env.FLOW_BRANCH }}
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Configure docker
+        run: gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push docker image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6
+        with:
+          context: .
+          file: server/api/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.API_IMAGE_NAME_GHCR }}
+            ${{ env.API_IMAGE_NAME_GCP }}
+          build-args: VERSION=${{ env.FLOW_BRANCH }}
+          cache-from: type=gha,scope=flow-api
+          cache-to: type=gha,mode=max,scope=flow-api
+      - name: Deploy
+        run: |
+          gcloud run deploy reearth-flow-api \
+            --image $API_IMAGE_NAME_GCP \
+            --region ${{ vars.GCP_REGION }} \
+            --platform managed \
+            --quiet
+
+  deploy_web:
+    runs-on: ubuntu-latest
+    if: inputs.only_policies != 'true' && github.event.repository.full_name == 'eukarya-inc/PLATEAU-VIEW'
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ env.FLOW_REPO }}
+          ref: ${{ env.FLOW_BRANCH }}
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Configure docker
+        run: gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push docker image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6
+        with:
+          context: ui
+          file: ui/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE_NAME_GHCR }}
+            ${{ env.WEB_IMAGE_NAME_GCP }}
+          cache-from: type=gha,scope=flow-web
+          cache-to: type=gha,mode=max,scope=flow-web
+      - name: Deploy
+        run: |
+          gcloud run deploy reearth-flow-web \
+            --image $WEB_IMAGE_NAME_GCP \
+            --region ${{ vars.GCP_REGION }} \
+            --platform managed \
+            --quiet
+
+  deploy_subscriber:
+    runs-on: ubuntu-latest
+    if: inputs.only_policies != 'true' && github.event.repository.full_name == 'eukarya-inc/PLATEAU-VIEW'
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ env.FLOW_REPO }}
+          ref: ${{ env.FLOW_BRANCH }}
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Configure docker
+        run: gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push docker image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6
+        with:
+          context: .
+          file: server/subscriber/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.SUBSCRIBER_IMAGE_NAME_GHCR }}
+            ${{ env.SUBSCRIBER_IMAGE_NAME_GCP }}
+          build-args: VERSION=${{ env.FLOW_BRANCH }}
+          cache-from: type=gha,scope=flow-subscriber
+          cache-to: type=gha,mode=max,scope=flow-subscriber
+      - name: Deploy
+        run: |
+          gcloud run deploy reearth-flow-subscriber \
+            --image $SUBSCRIBER_IMAGE_NAME_GCP \
+            --region ${{ vars.GCP_REGION }} \
+            --platform managed \
+            --quiet
+
+  deploy_websocket:
+    runs-on: ubuntu-latest
+    if: inputs.only_policies != 'true' && github.event.repository.full_name == 'eukarya-inc/PLATEAU-VIEW'
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ env.FLOW_REPO }}
+          ref: ${{ env.FLOW_BRANCH }}
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Configure docker
+        run: gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push docker image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6
+        with:
+          context: server/websocket
+          file: server/websocket/Dockerfile.websocket
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.WS_IMAGE_NAME_GHCR }}
+            ${{ env.WS_IMAGE_NAME_GCP }}
+          cache-from: type=gha,scope=flow-websocket
+          cache-to: type=gha,mode=max,scope=flow-websocket
+      - name: Deploy
+        run: |
+          gcloud run deploy reearth-flow-websocket \
+            --image $WS_IMAGE_NAME_GCP \
+            --region ${{ vars.GCP_REGION }} \
+            --platform managed \
+            --quiet
+
+  ci-engine:
+    runs-on: ubuntu-latest
+    if: inputs.only_policies != 'true' && github.event.repository.full_name == 'eukarya-inc/PLATEAU-VIEW'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ env.FLOW_REPO }}
+          ref: ${{ env.FLOW_BRANCH }}
+      - uses: dtolnay/rust-toolchain@2ea1b3bdd0261867664fd125505456a7b9c3385c # 1.93.1
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: engine
+          shared-key: engine-ci
+      - uses: taiki-e/install-action@74e87cbfa15a59692b158178d8905a61bf6fca95 # v2.75.20
+        with:
+          tool: cargo-make,taplo-cli
+      - name: Lint
+        working-directory: engine
+        run: |
+          cargo make clippy
+          cargo make format -- --check
+          cargo make format-taplo -- --check
+      - name: Test
+        working-directory: engine
+        run: cargo make test-rs
+
+  deploy_worker:
+    needs: [ci-engine]
+    runs-on: ubuntu-latest
+    if: inputs.only_policies != 'true' && github.event.repository.full_name == 'eukarya-inc/PLATEAU-VIEW'
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ env.FLOW_REPO }}
+          ref: ${{ env.FLOW_BRANCH }}
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Configure docker
+        run: gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push docker image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6
+        with:
+          context: engine
+          file: engine/containers/worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.WORKER_IMAGE_NAME_GHCR }}
+            ${{ env.WORKER_IMAGE_NAME_GCP }}
+          cache-from: type=gha,scope=flow-worker
+          cache-to: type=gha,mode=max,scope=flow-worker
+
+  upload_actions_schema:
+    needs: [deploy_api, deploy_worker]
+    runs-on: ubuntu-latest
+    environment: dev
+    if: ${{ inputs.only_policies != 'true' && github.event.repository.full_name == 'eukarya-inc/PLATEAU-VIEW' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ env.FLOW_REPO }}
+          ref: ${{ env.FLOW_BRANCH }}
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Upload actions schema to GCS
+        run: gsutil -m cp engine/schema/actions*.json gs://${{ vars.REEARTH_FLOW_GCS_BUCKET_NAME }}/actions/
+
+  update-policies:
+    runs-on: ubuntu-latest
+    if: github.event.repository.full_name == 'eukarya-inc/PLATEAU-VIEW'
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Download and merge all policies from GAR
+        run: |
+          set -euo pipefail
+
+          GCP_PROJECT_ID=reearth-oss
+          GAR_REPO=cerbos-policies
+          LOCATION=us-central1
+          OUT_DIR=merged-policies
+          ARTIFACT_DIR=artifacts
+
+          mkdir -p "$OUT_DIR"
+          mkdir -p "$ARTIFACT_DIR"
+
+          echo "Fetching package list from GAR..."
+          PACKAGE_NAMES=$(gcloud artifacts packages list \
+            --project="$GCP_PROJECT_ID" \
+            --repository="$GAR_REPO" \
+            --location="$LOCATION" \
+            --format="value(name)" | sed 's#.*/##')
+
+          for PACKAGE in $PACKAGE_NAMES; do
+            echo "→ Downloading package: $PACKAGE"
+
+            gcloud artifacts files download "${PACKAGE}:current:policies.tar.gz" \
+              --project="$GCP_PROJECT_ID" \
+              --repository="$GAR_REPO" \
+              --location="$LOCATION" \
+              --destination="$ARTIFACT_DIR"
+
+            DOWNLOADED_FILE=$(find "$ARTIFACT_DIR" -name '*.tar.gz' | head -n 1)
+            SAFE_NAME="${PACKAGE}_current_policies.tar.gz"
+            mv "$DOWNLOADED_FILE" "${ARTIFACT_DIR}/${SAFE_NAME}"
+
+            echo "→ Extracting ${SAFE_NAME}"
+            tar -xzf "${ARTIFACT_DIR}/${SAFE_NAME}" -C "$OUT_DIR"
+          done
+      - name: Sync merged policies to GCS
+        run: |
+          set -euo pipefail
+          gsutil -m rsync -r -d -x "\.cerbos\.yaml$" merged-policies/ $CERBOS_BUCKET_NAME_PLATEAU_DEV
+          echo "All policies merged and synced to $CERBOS_BUCKET_NAME_PLATEAU_DEV"
+
+  deploy-cerbos:
+    needs: update-policies
+    runs-on: ubuntu-latest
+    if: github.event.repository.full_name == 'eukarya-inc/PLATEAU-VIEW'
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Configure docker
+        run: gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+      - name: Deploy
+        run: |
+          gcloud run deploy cerbos \
+            --image $CERBOS_IMAGE_NAME \
+            --region ${{ vars.GCP_REGION }} \
+            --platform managed \
+            --quiet

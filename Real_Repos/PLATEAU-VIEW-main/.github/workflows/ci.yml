@@ -1,0 +1,518 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      action_type:
+        description: "Action type"
+        required: true
+        type: choice
+        options:
+          - editor
+          - extension
+          - geo
+          - server
+          - tile
+          - tools
+          - worker
+          - docs
+          - cloudflare-tiles
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      editor-core: ${{ steps.editor-core.outputs.any_changed }}
+      editor-server: ${{ steps.editor-server.outputs.any_changed }}
+      editor-web: ${{ steps.editor-web.outputs.any_changed }}
+      extension: ${{ steps.extension.outputs.any_changed }}
+      geo: ${{ steps.geo.outputs.any_changed }}
+      server: ${{ steps.server.outputs.any_changed }}
+      tools: ${{ steps.tools.outputs.any_changed }}
+      worker: ${{ steps.worker.outputs.any_changed }}
+      tile: ${{ steps.tile.outputs.any_changed }}
+      cms-server: ${{ steps.cms-server.outputs.any_changed }}
+      cms-worker: ${{ steps.cms-worker.outputs.any_changed }}
+      cms-web: ${{ steps.cms-web.outputs.any_changed }}
+      docs: ${{ steps.docs.outputs.any_changed }}
+      cloudflare-tiles: ${{ steps.cloudflare-tiles.outputs.any_changed }}
+      build: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref_name == 'main' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: changed files for extension
+        id: extension
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          files: |
+            extension/**
+            .github/workflows/ci-extension.yml
+            .github/workflows/ci-extension-version-update.yml
+            .github/workflows/deploy-extension-*.yml
+      - name: changed files for server
+        id: server
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          files: |
+            server/**
+            .github/workflows/ci-server.yml
+            .github/workflows/build-server.yml
+            .github/workflows/deploy-server-*.yml
+      - name: changed files for tools
+        id: tools
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          files: |
+            tools/**
+            .github/workflows/ci-tools.yml
+      - name: changed files for geo
+        id: geo
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          files: |
+            geo/**
+            .github/workflows/ci-geo.yml
+            .github/workflows/build-geo.yml
+            .github/workflows/deploy-geo-*.yml
+      - name: changed files for worker
+        id: worker
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            worker/**
+            .github/workflows/ci-worker.yml
+            .github/workflows/build-worker.yml
+            .github/workflows/deploy-worker-*.yml
+      - name: changed files for tile
+        id: tile
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            tile/**
+            .github/workflows/ci-tile.yml
+            .github/workflows/build-tile.yml
+            .github/workflows/deploy-tile-*.yml
+      - name: changed files for docs
+        id: docs
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            docs/**
+            .github/workflows/ci-docs.yml
+            .github/workflows/build-docs.yml
+            .github/workflows/deploy-docs-*.yml
+      - name: changed files for cloudflare-tiles
+        id: cloudflare-tiles
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            cloudflare/tiles/**
+            .github/workflows/ci-cloudflare-tiles.yml
+            .github/workflows/deploy-cloudflare-tiles.yml
+      - name: changed files for editor - core
+        id: editor-core
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            editor/core/**
+            .github/workflows/ci-editor.yml
+            .github/workflows/build-editor.yml
+            .github/workflows/deploy-editor-*.yml
+      - name: changed files for editor - server
+        id: editor-server
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            editor/server/**
+            .github/workflows/ci-editor.yml
+            .github/workflows/build-editor.yml
+            .github/workflows/deploy-editor-*.yml
+      - name: changed files for editor - web
+        id: editor-web
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            editor/web/**
+            .github/workflows/ci-editor.yml
+            .github/workflows/build-editor.yml
+            .github/workflows/deploy-editor-*.yml
+      - name: changed files for cms - server
+        id: cms-server
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            cms/server/**
+            cms/.golangci.yml
+            .github/workflows/ci-cms-server.yml
+            .github/workflows/build-cms-server.yml
+            .github/workflows/deploy-cms-*.yml
+      - name: changed files for cms - worker
+        id: cms-worker
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            cms/worker/**
+            cms/.golangci.yml
+            .github/workflows/ci-cms-worker.yml
+            .github/workflows/build-cms-worker.yml
+            .github/workflows/deploy-cms-*.yml
+      - name: changed files for cms - web
+        id: cms-web
+        uses: step-security/changed-files@2e07db73e5ccdb319b9a6c7766bd46d39d304bad # v47.0.5
+        with:
+          since_last_remote_commit: true
+          files: |
+            cms/web/**
+            .github/workflows/ci-cms-web.yml
+            .github/workflows/build-cms-web.yml
+            .github/workflows/deploy-cms-*.yml
+
+
+  # ci-extension-version-update:
+  #   needs: prepare
+  #   if: ${{ !failure() && needs.prepare.outputs.extension == 'true' && github.event_name == 'push' && github.ref_name == 'main' }}
+  #   uses: ./.github/workflows/ci-extension-version-update.yml
+  #   with:
+  #     commit-sha: ${{ github.sha }}
+
+  ci-editor-core:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.editor-core == 'true' || inputs.action_type == 'editor' }}
+    uses: ./.github/workflows/ci-editor.yml
+    with:
+      core: 'true'
+
+  ci-editor-server:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.editor-server == 'true' || inputs.action_type == 'editor' }}
+    uses: ./.github/workflows/ci-editor.yml
+    with:
+      server: 'true'
+
+  ci-editor-web:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.editor-web == 'true' || inputs.action_type == 'editor' }}
+    uses: ./.github/workflows/ci-editor.yml
+    with:
+      web: 'true'
+
+  ci-extension:
+    needs:
+      - prepare
+      # - ci-extension-version-update
+    if: needs.prepare.outputs.extension == 'true' || inputs.action_type == 'extension'
+    uses: ./.github/workflows/ci-extension.yml
+
+  ci-tools:
+    needs: prepare
+    if: needs.prepare.outputs.tools == 'true' || inputs.action_type == 'tools'
+    uses: ./.github/workflows/ci-tools.yml
+    with:
+      release_tools: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+
+  ci-geo:
+    needs: prepare
+    if: needs.prepare.outputs.geo == 'true' || inputs.action_type == 'geo'
+    uses: ./.github/workflows/ci-geo.yml
+
+  ci-server:
+    needs: prepare
+    if: needs.prepare.outputs.server == 'true' || inputs.action_type == 'server'
+    uses: ./.github/workflows/ci-server.yml
+
+  ci-worker:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.worker == 'true' || inputs.action_type == 'worker' }}
+    uses: ./.github/workflows/ci-worker.yml
+
+  ci-tile:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.tile == 'true' || inputs.action_type == 'tile' }}
+    uses: ./.github/workflows/ci-tile.yml
+
+  ci-docs:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.docs == 'true' || inputs.action_type == 'docs' }}
+    uses: ./.github/workflows/ci-docs.yml
+
+  ci-cloudflare-tiles:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.cloudflare-tiles == 'true' || inputs.action_type == 'cloudflare-tiles' }}
+    uses: ./.github/workflows/ci-cloudflare-tiles.yml
+
+  deploy-cloudflare-tiles:
+    needs: [prepare, ci-cloudflare-tiles]
+    if: ${{ !failure() && needs.ci-cloudflare-tiles.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/deploy-cloudflare-tiles.yml
+    secrets: inherit
+
+  ci-cms-server:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.cms-server == 'true' }}
+    uses: ./.github/workflows/ci-cms-server.yml
+
+  ci-cms-worker:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.cms-worker == 'true' }}
+    uses: ./.github/workflows/ci-cms-worker.yml
+
+  ci-cms-web:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.cms-web == 'true' }}
+    uses: ./.github/workflows/ci-cms-web.yml
+
+  ci:
+    runs-on: ubuntu-latest
+    needs:
+      - ci-extension
+      - ci-geo
+      - ci-server
+      - ci-tools
+      - ci-worker
+      - ci-tile
+      - ci-docs
+      - ci-cms-server
+      - ci-cms-worker
+      - ci-cms-web
+      - ci-cloudflare-tiles
+    if: always()
+    steps:
+      - run: |
+          results="${{ toJSON(needs.*.result) }}"
+          if echo "$results" | grep -q "failure"; then
+            echo "One or more CI jobs failed"
+            exit 1
+          fi
+          if echo "$results" | grep -q "cancelled"; then
+            echo "One or more CI jobs were cancelled"
+            exit 1
+          fi
+          echo OK
+
+  deploy-extension-dev:
+    needs: [prepare, ci-extension]
+    if: ${{ success() && needs.prepare.outputs.build == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deployment
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          event-type: deploy-extension-dev
+
+  build-geo:
+    needs: [prepare]
+    if: ${{ !failure() && (needs.prepare.outputs.geo == 'true' || inputs.action_type == 'geo') && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-geo.yml
+
+  push-geo:
+    needs: [prepare, ci-geo, build-geo]
+    if: ${{ !failure() && needs.ci-geo.result == 'success' && needs.build-geo.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/push-image.yml
+    with:
+      build_tag: ${{ needs.build-geo.outputs.image }}
+      latest_tag: ${{ needs.build-geo.outputs.latest_tag }}
+
+  deploy-geo-dev:
+    needs: push-geo
+    if: ${{ always() && needs.push-geo.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deployment
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          event-type: deploy-geo-dev
+
+  build-server:
+    needs: [prepare]
+    if: ${{ !failure() && (needs.prepare.outputs.server == 'true' || inputs.action_type == 'server') && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-server.yml
+
+  push-server:
+    needs: [prepare, ci-server, build-server]
+    if: ${{ !failure() && needs.ci-server.result == 'success' && needs.build-server.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/push-image.yml
+    with:
+      build_tag: ${{ needs.build-server.outputs.image }}
+      latest_tag: ${{ needs.build-server.outputs.latest_tag }}
+
+  deploy-server-dev:
+    needs: push-server
+    if: ${{ always() && needs.push-server.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deployment
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          event-type: deploy-server-dev
+
+  build-worker:
+    needs: [prepare]
+    if: ${{ !failure() && (needs.prepare.outputs.worker == 'true' || inputs.action_type == 'worker') && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-worker.yml
+
+  push-worker:
+    needs: [prepare, ci-worker, build-worker]
+    if: ${{ !failure() && needs.ci-worker.result == 'success' && needs.build-worker.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/push-image.yml
+    with:
+      build_tag: ${{ needs.build-worker.outputs.image }}
+      latest_tag: ${{ needs.build-worker.outputs.latest_tag }}
+
+  deploy-worker-dev:
+    needs: push-worker
+    if: ${{ always() && needs.push-worker.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deployment
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          event-type: deploy-worker-dev
+
+  build-tile:
+    needs: [prepare]
+    if: ${{ !failure() && (needs.prepare.outputs.tile == 'true' || inputs.action_type == 'tile') && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-tile.yml
+
+  push-tile:
+    needs: [prepare, ci-tile, build-tile]
+    if: ${{ !failure() && needs.ci-tile.result == 'success' && needs.build-tile.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/push-image.yml
+    with:
+      build_tag: ${{ needs.build-tile.outputs.image }}
+      latest_tag: ${{ needs.build-tile.outputs.latest_tag }}
+
+  deploy-tile-dev:
+    needs: push-tile
+    if: ${{ always() && needs.push-tile.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deployment
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          event-type: deploy-tile-dev
+
+  build-docs:
+    needs: [prepare]
+    if: ${{ !failure() && (needs.prepare.outputs.docs == 'true' || inputs.action_type == 'docs') && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-docs.yml
+
+  push-docs:
+    needs: [prepare, ci-docs, build-docs]
+    if: ${{ !failure() && needs.ci-docs.result == 'success' && needs.build-docs.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/push-image.yml
+    with:
+      build_tag: ${{ needs.build-docs.outputs.image }}
+      latest_tag: ${{ needs.build-docs.outputs.latest_tag }}
+
+  deploy-docs-dev:
+    needs: push-docs
+    if: ${{ always() && needs.push-docs.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deployment
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          event-type: deploy-docs-dev
+
+  build-editor-core:
+    needs:
+      - prepare
+      - ci-editor-core
+    if: ${{ !failure() && needs.ci-editor-core.result == 'success' && needs.prepare.outputs.build == 'false' }}
+    uses: ./.github/workflows/build-editor.yml
+    with:
+      core: 'true'
+    secrets:
+      GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+  build-editor-server:
+    needs:
+      - prepare
+      - ci-editor-server
+    if: ${{ !failure() && needs.ci-editor-server.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-editor.yml
+    with:
+      server: 'true'
+
+  deploy-editor-server-dev:
+    needs: build-editor-server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deployment
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          event-type: deploy-editor-server-dev
+
+  build-editor-web:
+    needs:
+      - prepare
+      - ci-editor-web
+    if: ${{ !failure() && needs.ci-editor-web.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-editor.yml
+    with:
+      web: 'true'
+
+  deploy-editor-web-dev:
+    needs: build-editor-web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deployment
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          event-type: deploy-editor-web-dev
+
+  build-cms-server:
+    needs:
+      - prepare
+      - ci-cms-server
+    if: ${{ !failure() && needs.ci-cms-server.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-cms-server.yml
+    with:
+      server: 'true'
+
+  build-cms-worker:
+    needs:
+      - prepare
+      - ci-cms-worker
+    if: ${{ !failure() && needs.ci-cms-worker.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-cms-worker.yml
+    with:
+      worker: 'true'
+
+  build-cms-web:
+    needs:
+      - prepare
+      - ci-cms-web
+    if: ${{ !failure() && needs.ci-cms-web.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/build-cms-web.yml
+    with:
+      web: 'true'
+
+  deploy-cms-dev:
+    needs:
+      - build-cms-server
+      - build-cms-worker
+      - build-cms-web
+    if: ${{ !failure() && !cancelled() && (needs.build-cms-server.result == 'success' || needs.build-cms-worker.result == 'success' || needs.build-cms-web.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deployment
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          event-type: deploy-cms-dev

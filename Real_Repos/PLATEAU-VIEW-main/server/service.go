@@ -1,0 +1,326 @@
+package main
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/citygml"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/cmsintegration"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/datacatalog"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/geocoding"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/govpolygon"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/lodstat"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/mcp"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/mcp/plateauspecmcp"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/openapi"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/opinion"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/plateaucms"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/proxy"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/putil"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/sdkapi/sdkapiv3"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/sidebar"
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/tiles"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"github.com/reearth/reearth-cms-api/go/cmswebhook"
+	"github.com/reearth/reearthx/log"
+	"github.com/reearth/reearthx/util"
+)
+
+type Service struct {
+	Name           string
+	Echo           func(g *echo.Group) error
+	Webhook        cmswebhook.Handler
+	DisableNoCache bool
+}
+
+var services = [](func(*Config) (*Service, error)){
+	Proxy,
+	OpenAPI,
+	CMSIntegration,
+	SDKAPI,
+	Opinion,
+	Sidebar,
+	DataCatalog,
+	GovPolygon,
+	Geocoding,
+	Tiles,
+	Embed,
+	CityGML,
+	MCP,
+	Spec,
+	LodStat,
+}
+
+func Services(conf *Config) (srv []*Service, _ error) {
+	for _, i := range services {
+		s, err := i(conf)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", funcName(i), err)
+		}
+		if s == nil {
+			continue
+		}
+		srv = append(srv, s)
+	}
+	return
+}
+
+func Proxy(conf *Config) (*Service, error) {
+	c := conf.Proxy()
+	if c.ODPTConsumerKey == "" {
+		return nil, nil
+	}
+
+	return &Service{
+		Name: "odpt-proxy",
+		Echo: func(g *echo.Group) error {
+			proxy.Echo(g.Group("/odpt-proxy"), c)
+			return nil
+		},
+	}, nil
+}
+
+func OpenAPI(*Config) (*Service, error) {
+	return &Service{
+		Name:           "openapi",
+		DisableNoCache: true,
+		Echo: func(g *echo.Group) error {
+			return openapi.Handler(g)
+		},
+	}, nil
+}
+
+func CMSIntegration(conf *Config) (*Service, error) {
+	c := conf.CMSIntegration()
+	if c.CMSBaseURL == "" || c.CMSToken == "" || c.FMEBaseURL == "" || c.Host == "" || c.FMEToken == "" {
+		return nil, nil
+	}
+
+	w, err := cmsintegration.WebhookHandler(c)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Service{
+		Name: "cmsintegration",
+		Echo: func(g *echo.Group) error {
+			return cmsintegration.Handler(c, g)
+		},
+		Webhook: w,
+	}, nil
+}
+
+func SDKAPI(conf *Config) (*Service, error) {
+	c := conf.SDKAPI()
+
+	return &Service{
+		Name:           "sdkapi",
+		DisableNoCache: true,
+		Echo: func(g *echo.Group) error {
+			_, err := sdkapiv3.Handler(c, g.Group("/sdk"))
+			return err
+		},
+	}, nil
+}
+
+func Opinion(conf *Config) (*Service, error) {
+	c := conf.Opinion()
+	if c.SendGridAPIKey == "" || c.From == "" || c.To == "" {
+		return nil, nil
+	}
+
+	return &Service{
+		Name: "opinion",
+		Echo: func(g *echo.Group) error {
+			opinion.Echo(g.Group("/opinion"), c)
+			return nil
+		},
+	}, nil
+}
+
+func Sidebar(conf *Config) (*Service, error) {
+	c := conf.Sidebar()
+	if c.AdminToken == "" || c.CMSMainToken == "" || c.CMSBaseURL == "" {
+		return nil, nil
+	}
+
+	return &Service{
+		Name: "sidebar",
+		Echo: func(g *echo.Group) error {
+			return util.Try(
+				func() error { return sidebar.Echo(g.Group("/sidebar"), c) },
+				func() error { return sidebar.ShareEcho(g.Group("/share"), c) },
+			)
+		},
+	}, nil
+}
+
+func DataCatalog(conf *Config) (*Service, error) {
+	c := conf.DataCatalog()
+	if c.CMSBaseURL == "" {
+		return nil, nil
+	}
+	if c.PlaygroundEndpoint == "" {
+		c.PlaygroundEndpoint = "/datacatalog"
+	}
+
+	return &Service{
+		Name: "datacatalog",
+		Echo: func(g *echo.Group) error {
+			return datacatalog.Echo(c, g.Group("/datacatalog"))
+		},
+		DisableNoCache: true,
+	}, nil
+}
+
+func GovPolygon(conf *Config) (*Service, error) {
+	return &Service{
+		Name:           "govpolygon",
+		DisableNoCache: true,
+		Echo: func(g *echo.Group) error {
+			govpolygon.New(
+				conf.LocalURL("/datacatalog/graphql"),
+				true,
+			).Route(g.Group("/govpolygon"))
+			return nil
+		},
+	}, nil
+}
+
+func Tiles(conf *Config) (*Service, error) {
+	return &Service{
+		Name:           "tiles",
+		DisableNoCache: true,
+		Echo: func(g *echo.Group) error {
+			ctx := context.Background()
+			h, err := tiles.New(ctx, conf.Tiles())
+			if err != nil {
+				return err
+			}
+
+			h.Route(g)
+			h.Init(context.Background())
+			return nil
+		},
+	}, nil
+}
+
+func Embed(conf *Config) (*Service, error) {
+	return &Service{
+		Name: "embed",
+		Echo: func(g *echo.Group) error {
+			_ = putil.DeliverFile(g, "PlateauView3.js", "text/javascript")
+			_ = putil.DeliverFile(g, "reearth.yml", "application/yaml")
+			return nil
+		},
+	}, nil
+}
+
+func CityGML(conf *Config) (*Service, error) {
+	return &Service{
+		Name: "citygml",
+		Echo: func(g *echo.Group) error {
+			return citygml.Echo(conf.CityGML(), g.Group("/citygml"))
+		},
+	}, nil
+}
+
+func MCP(conf *Config) (*Service, error) {
+	dcConf := conf.DataCatalog()
+
+	return &Service{
+		Name: "mcp",
+		Echo: func(g *echo.Group) error {
+			// Create MCP handler with datacatalog integration if configured
+			mcpCfg := &mcp.Config{
+				Host: dcConf.Host,
+			}
+
+			// If datacatalog is fully configured, create reposHandler for data catalog tools
+			if dcConf.CMSBaseURL != "" {
+				pcms, err := plateaucms.New(dcConf.Config)
+				if err != nil {
+					// Log error but continue with spec-only MCP
+					log.Errorf("mcp: failed to initialize plateaucms, datacatalog tools will not be available: %v", err)
+				} else {
+					reposHandler, err := datacatalog.NewReposHandler(dcConf, pcms)
+					if err != nil {
+						log.Errorf("mcp: failed to create repos handler, datacatalog tools will not be available: %v", err)
+					} else {
+						mcpCfg.DataCatalogReposHandler = reposHandler
+
+						// Initialize repos in background
+						go func() {
+							ctx := context.Background()
+							if dcConf.CacheURL != "" {
+								if err := reposHandler.InitFromCache(ctx, dcConf.CacheURL); err != nil {
+									log.Errorf("mcp: failed to initialize repos from cache: %v", err)
+								}
+							} else {
+								if err := reposHandler.Init(ctx); err != nil {
+									log.Errorf("mcp: failed to initialize repos: %v", err)
+								}
+							}
+						}()
+
+						// Create handler with CMS middleware
+						handler := mcp.NewHTTPHandler(mcpCfg)
+						handler.SetCMSMiddleware(reposHandler.Middleware())
+						handler.RegisterRoutes(g.Group("/mcp"))
+						return nil
+					}
+				}
+			}
+
+			// Fallback: register with spec tools only
+			mcp.RegisterHTTPEndpoint(g.Group("/mcp"))
+			return nil
+		},
+	}, nil
+}
+
+// Spec exposes the PLATEAU specification document API (full-text search /
+// outline / read) at /spec. It is independent of CMS data and the data
+// catalog, mirroring the plateau_spec_* MCP tools as a plain REST API.
+func Spec(conf *Config) (*Service, error) {
+	return &Service{
+		Name: "spec",
+		Echo: func(g *echo.Group) error {
+			sg := g.Group("/spec")
+			sg.Use(middleware.CORS(), middleware.Gzip())
+			plateauspecmcp.RegisterEcho(sg)
+
+			// Eagerly warm the search index in the background so the first
+			// request doesn't pay the multi-second download cost and a
+			// transient startup failure doesn't surface to that first user.
+			// Initialization is retryable, so a failure here is recovered on
+			// the next request.
+			go func() {
+				if err := plateauspecmcp.Prewarm(context.Background()); err != nil {
+					log.Errorf("spec: failed to prewarm search index: %v", err)
+				}
+			}()
+
+			return nil
+		},
+	}, nil
+}
+
+func LodStat(conf *Config) (*Service, error) {
+	return &Service{
+		Name: "lodstat",
+		Echo: func(g *echo.Group) error {
+			return lodstat.Echo(conf.LodStat(), g.Group("/lodstat"))
+		},
+	}, nil
+}
+
+func Geocoding(conf *Config) (*Service, error) {
+	return &Service{
+		Name: "geocoding",
+		Echo: func(g *echo.Group) error {
+			return geocoding.Echo(g.Group("/geocoding"), conf.Geocoding())
+		},
+	}, nil
+}

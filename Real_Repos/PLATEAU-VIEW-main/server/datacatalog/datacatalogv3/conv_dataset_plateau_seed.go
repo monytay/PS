@@ -1,0 +1,620 @@
+package datacatalogv3
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/eukarya-inc/PLATEAU-VIEW/server/datacatalog/plateauapi"
+	"github.com/samber/lo"
+)
+
+const bldgCode = "bldg"
+
+type plateauDatasetSeed struct {
+	AssetURLs []string
+	// AssetSizes maps an asset URL to its CMS-reported totalSize in bytes.
+	// Indexed by URL (not slice position) so merge/split operations can
+	// preserve sizes without keeping a parallel array.
+	AssetSizes map[string]int64
+	Assets     []*AssetName
+	Subname    string
+	Subcode    string
+	Suborder   *int
+	Desc       string
+	TargetArea plateauapi.Area
+	WardID     *plateauapi.ID
+	WardCode   *plateauapi.AreaCode
+	Groups     []string
+	// common
+	DatasetType           *plateauapi.PlateauDatasetType
+	Dic                   Dic
+	Area                  *areaContext
+	Pref                  *plateauapi.Prefecture
+	City                  *plateauapi.City
+	Spec                  *plateauapi.PlateauSpecMinor
+	River                 *plateauapi.River
+	Admin                 any
+	LayerNames            LayerNames
+	Year                  int
+	OpenDataURL           string
+	HideTexture           bool
+	HideLOD               bool
+	RegisterationYear     int
+	UseCategoryAsMVTLayer bool
+	IsFlow                bool // Flow model data
+}
+
+func (seed plateauDatasetSeed) GetID() string {
+	id := standardItemID(seed.DatasetType.Code, seed.TargetArea.GetCode(), seed.Subcode)
+
+	// Check if any asset is interior
+	isInterior := false
+	for _, asset := range seed.Assets {
+		if asset != nil && asset.Ex.Normal != nil && asset.Ex.Normal.Interior {
+			isInterior = true
+			break
+		}
+	}
+
+	// Add "_interior" suffix for interior datasets
+	if isInterior {
+		id = id + "_interior"
+	}
+
+	// Add "_flow" suffix for Flow datasets
+	if seed.IsFlow {
+		id = id + "_flow"
+	}
+
+	return id
+}
+
+func plateauDatasetSeedsFrom(i *PlateauFeatureItem, opts ToPlateauDatasetsOptions) (res []plateauDatasetSeed, warning []string) {
+	cityCode := lo.FromPtr(opts.Area.CityCode).String()
+	year := opts.Area.CityItem.YearInt()
+
+	dic, err := i.ReadDic()
+	if err != nil && i.Dic != "" {
+		warning = append(warning, fmt.Sprintf("plateau %s %s: invalid dic: %s", cityCode, opts.DatasetType.Code, err))
+		return
+	}
+
+	if opts.DatasetType.Code == bldgCode {
+		seeds, w := plateauDatasetSeedsFromBldg(i, opts.DatasetType, cityCode, opts.Area.Wards)
+		warning = append(warning, w...)
+		res = append(res, seeds...)
+	} else {
+		items := i.Items
+		if len(i.Data) > 0 {
+			items = append([]PlateauFeatureItemDatum{
+				{
+					Data:   i.Data,
+					Desc:   i.Desc,
+					Group:  i.Group,
+					Simple: true,
+				},
+			}, items...)
+		}
+
+		for _, item := range items {
+			seed, w := plateauDatasetSeedFromItem(item, opts.DatasetType, dic, cityCode)
+			warning = append(warning, w...)
+			res = append(res, seed)
+		}
+	}
+
+	// Propagate per-URL asset sizes from the parsed feature item to every
+	// seed. plateauDatasetItemSeedFrom looks these up by URL.
+	for idx := range res {
+		res[idx].AssetSizes = i.AssetSizes
+	}
+
+	// merge seeds with same ID
+	res = mergeDatasetSeeds(res)
+
+	// common
+	for i := range res {
+		res[i].DatasetType = opts.DatasetType
+		res[i].Dic = dic
+		res[i].Area = opts.Area
+		res[i].Pref = opts.Area.Pref
+		res[i].City = opts.Area.City
+		res[i].Spec = opts.Spec
+		res[i].IsFlow = opts.IsFlow
+
+		// Flow data is always beta stage
+		stg := opts.Area.CityItem.PlateauStage(opts.DatasetType.Code)
+		cmsURL := opts.CMSInfo.ItemBaseURL(opts.DatasetType.Code)
+		if opts.IsFlow {
+			stg = stageBeta
+			cmsURL = opts.CMSInfo.ItemBaseURL(flowModel)
+		}
+		res[i].Admin = adminFrom(Admin{
+			ItemID:      opts.ID,
+			Stage:       stg,
+			CMSURL:      cmsURL,
+			CreatedAt:   opts.CreatedAt,
+			UpdatedAt:   opts.UpdatedAt,
+			SubAreaCode: opts.Area.CityItem.SubCityCode,
+		})
+		res[i].LayerNames = opts.LayerNames
+		res[i].Year = year
+		res[i].OpenDataURL = opts.Area.CityItem.GetOpenDataURL()
+		res[i].HideTexture = opts.FeatureType.HideTexture
+		res[i].HideLOD = opts.FeatureType.HideLOD
+		res[i].RegisterationYear = opts.Year
+		res[i].UseCategoryAsMVTLayer = opts.FeatureType.UseCategoryAsMVTLayer
+		if res[i].TargetArea == nil {
+			res[i].TargetArea = opts.Area.City
+			if res[i].TargetArea == nil {
+				res[i].TargetArea = opts.Area.Pref
+			}
+		}
+	}
+
+	return
+}
+
+func mergeDatasetSeeds(seeds []plateauDatasetSeed) []plateauDatasetSeed {
+	m := map[string]*plateauDatasetSeed{}
+	res := make([]*plateauDatasetSeed, 0, len(seeds))
+
+	for _, seed := range seeds {
+		seed := seed
+		key := seed.Subcode
+
+		first := m[key]
+		if key == "" || first == nil {
+			m[key] = &seed
+			res = append(res, &seed)
+			continue
+		}
+
+		first.AssetURLs = append(first.AssetURLs, seed.AssetURLs...)
+		first.Assets = append(first.Assets, seed.Assets...)
+	}
+
+	// After merging, separate interior and non-interior assets
+	finalRes := make([]plateauDatasetSeed, 0, len(res)*2)
+	for _, seedPtr := range res {
+		seed := *seedPtr
+
+		// Separate assets into interior and non-interior
+		var interiorAssets []lo.Tuple2[string, *AssetName]
+		var regularAssets []lo.Tuple2[string, *AssetName]
+
+		for i, asset := range seed.Assets {
+			if asset != nil && asset.Ex.Normal != nil && asset.Ex.Normal.Interior {
+				interiorAssets = append(interiorAssets, lo.Tuple2[string, *AssetName]{A: seed.AssetURLs[i], B: asset})
+			} else {
+				regularAssets = append(regularAssets, lo.Tuple2[string, *AssetName]{A: seed.AssetURLs[i], B: asset})
+			}
+		}
+
+		// Add regular dataset if there are regular assets
+		if len(regularAssets) > 0 {
+			regularSeed := seed
+			regularSeed.AssetURLs = lo.Map(regularAssets, func(t lo.Tuple2[string, *AssetName], _ int) string { return t.A })
+			regularSeed.Assets = lo.Map(regularAssets, func(t lo.Tuple2[string, *AssetName], _ int) *AssetName { return t.B })
+			finalRes = append(finalRes, regularSeed)
+		}
+
+		// Add interior dataset if there are interior assets
+		if len(interiorAssets) > 0 {
+			interiorSeed := seed
+			interiorSeed.AssetURLs = lo.Map(interiorAssets, func(t lo.Tuple2[string, *AssetName], _ int) string { return t.A })
+			interiorSeed.Assets = lo.Map(interiorAssets, func(t lo.Tuple2[string, *AssetName], _ int) *AssetName { return t.B })
+			if interiorSeed.Subcode != "" {
+				interiorSeed.Subcode = interiorSeed.Subcode + "_interior"
+			}
+			finalRes = append(finalRes, interiorSeed)
+		}
+	}
+
+	return finalRes
+}
+
+func plateauDatasetSeedFromItem(item PlateauFeatureItemDatum, dt *plateauapi.PlateauDatasetType, dic Dic, cityCode string) (res plateauDatasetSeed, warning []string) {
+	assets := make([]lo.Tuple2[string, *AssetName], 0, len(item.Data))
+	for _, url := range item.Data {
+		n := nameWithoutExt(nameFromURL(url))
+		an := ParseAssetName(n)
+		if an == nil || !an.Ex.IsValid() {
+			warning = append(warning, fmt.Sprintf("plateau %s %s: invalid asset name: %s", cityCode, dt.Code, n))
+			continue
+		}
+
+		assets = append(assets, lo.Tuple2[string, *AssetName]{A: url, B: an})
+	}
+
+	if len(assets) == 0 {
+		if len(item.Data) > 0 {
+			warning = append(warning, fmt.Sprintf("plateau %s %s: some invalid assets", cityCode, dt.Code))
+		}
+		return
+	}
+
+	assetUrls := lo.Map(assets, func(a lo.Tuple2[string, *AssetName], _ int) string {
+		return a.A
+	})
+	assetNames := lo.Map(assets, func(a lo.Tuple2[string, *AssetName], _ int) *AssetName {
+		return a.B
+	})
+
+	var groups []string
+	if item.Group != "" {
+		groups = strings.Split(item.Group, "/")
+	}
+
+	res = plateauDatasetSeed{
+		AssetURLs: assetUrls,
+		Assets:    assetNames,
+		Desc:      item.Desc,
+		Groups:    groups,
+	}
+
+	if !item.Simple {
+		assetName := res.Assets[0]
+		key, dickey := assetName.Ex.DatasetKey(), assetName.Ex.DicKey()
+		var e *DicEntry
+
+		if dickey != "" {
+			var found bool
+			e, found = dic.FindEntryOrDefault(dt.Code, dickey)
+			if !found {
+				warning = append(warning, fmt.Sprintf("plateau %s %s: unknown dic key: %s", cityCode, dt.Code, dickey))
+				if e == nil {
+					return
+				}
+			}
+		}
+
+		var river *plateauapi.River
+		if assetName.Ex.Fld != nil {
+			if a := riverAdminFrom(assetName.Ex.Fld.Admin); a != nil {
+				if e == nil || e.Description == "" {
+					warning = append(warning, fmt.Sprintf("plateau %s %s: dic entry has no description or entry not found: %s", cityCode, dt.Code, key))
+				} else {
+					river = &plateauapi.River{
+						Name:  e.Description,
+						Admin: *a,
+					}
+				}
+			}
+		}
+
+		subname := item.Name
+		if subname == "" && e != nil {
+			if river != nil {
+				// fld
+				subname = fmt.Sprintf("%s（%s管理区間）", e.Description, toRiverAdminName(river.Admin))
+			} else {
+				subname = e.Description
+			}
+		}
+		if subname == "" && e != nil {
+			warning = append(warning, fmt.Sprintf("plateau %s %s: invalid dic entry: %s", cityCode, dt.Code, key))
+		}
+
+		var suborder *int
+		if e != nil {
+			suborder = e.Order
+		}
+
+		res.Subcode = key
+		res.Suborder = suborder
+		res.Subname = subname
+		res.River = river
+	}
+
+	return
+}
+
+func plateauDatasetSeedsFromBldg(i *PlateauFeatureItem, dt *plateauapi.PlateauDatasetType, cityCode string, wards []*plateauapi.Ward) (res []plateauDatasetSeed, warning []string) {
+	assets := lo.Zip2(lo.Map(i.Data, func(url string, ind int) *AssetName {
+		n := nameWithoutExt(nameFromURL(url))
+		an := ParseAssetName(n)
+		if an == nil || an.Ex.Normal == nil {
+			warning = append(warning, fmt.Sprintf("plateau %s %s[%d]: invalid asset name: %s", cityCode, dt.Code, ind, n))
+		}
+		return an
+	}), i.Data)
+	if len(assets) == 0 {
+		// warning = append(warning, fmt.Sprintf("plateau %s %s: no assets", cityCode, dt.Code))
+		return
+	}
+
+	if len(wards) == 0 {
+		res = append(res, plateauDatasetSeed{
+			AssetURLs: i.Data,
+			Assets: lo.Map(assets, func(name lo.Tuple2[*AssetName, string], _ int) *AssetName {
+				return name.A
+			}),
+			Desc: i.Desc,
+		})
+		return
+	}
+
+	var groups []string
+	if i.Group != "" {
+		groups = strings.Split(i.Group, "/")
+	}
+
+	for _, ward := range wards {
+		wardCode := ward.Code.String()
+		assets := lo.Filter(assets, func(name lo.Tuple2[*AssetName, string], _ int) bool {
+			return name.A != nil && name.A.Ex.Normal != nil && name.A.Ex.Normal.WardCode == wardCode
+		})
+		if len(assets) == 0 {
+			warning = append(warning, fmt.Sprintf("plateau %s %s: no assets for ward %s", cityCode, dt.Code, wardCode))
+			continue
+		}
+
+		res = append(res, plateauDatasetSeed{
+			AssetURLs: lo.Map(assets, func(name lo.Tuple2[*AssetName, string], _ int) string {
+				return name.B
+			}),
+			Assets: lo.Map(assets, func(name lo.Tuple2[*AssetName, string], _ int) *AssetName {
+				return name.A
+			}),
+			Desc:       i.Desc,
+			WardID:     lo.ToPtr(ward.ID),
+			WardCode:   lo.ToPtr(ward.Code),
+			TargetArea: ward,
+			Groups:     groups,
+		})
+	}
+
+	return
+}
+
+type plateauDatasetItemSeed struct {
+	ID                  string
+	Name                string
+	URL                 string
+	FileSize            *int64
+	Format              plateauapi.DatasetFormat
+	LOD                 *int
+	LODEx               *int
+	NoTexture           *bool
+	Layers              []string
+	FloodingScale       *plateauapi.FloodingScale
+	FloodingScaleSuffix *string
+	HideTexture         bool
+	HideLOD             bool
+	DefaultName         string
+}
+
+func (i plateauDatasetItemSeed) GetID(parentID string) string {
+	if i.ID != "" {
+		parentID = strings.TrimSuffix(parentID, "_"+i.ID)
+	}
+
+	ids := []string{parentID, i.ID}
+
+	if i.LOD != nil && !i.HideLOD {
+		lodex := ""
+		if i.LODEx != nil && *i.LODEx > 0 {
+			lodex = fmt.Sprintf("%d", *i.LODEx)
+		}
+		ids = append(ids, fmt.Sprintf("lod%d%s", *i.LOD, lodex))
+	}
+
+	if !i.HideTexture && i.NoTexture != nil && *i.NoTexture {
+		ids = append(ids, "no_texture")
+	}
+
+	return strings.Join(lo.Filter(ids, func(s string, _ int) bool {
+		return s != ""
+	}), "_")
+}
+
+func (i plateauDatasetItemSeed) GetName() string {
+	name := i.Name
+	var lod, tex string
+
+	if i.LOD != nil { // HideLOD should be ignored here
+		lodex := ""
+		if i.LODEx != nil && *i.LODEx > 0 {
+			lodex = fmt.Sprintf(".%d", *i.LODEx)
+		}
+		lod = fmt.Sprintf("LOD%d%s", *i.LOD, lodex)
+	}
+
+	if !i.HideTexture && i.NoTexture != nil && *i.NoTexture {
+		if name != "" || lod != "" {
+			tex += "（"
+		}
+		tex += "テクスチャなし"
+		if name != "" || lod != "" {
+			tex += "）"
+		}
+	}
+
+	if name != "" && lod != "" {
+		name += " "
+	} else if name == "" && lod == "" {
+		name = i.DefaultName
+	}
+
+	return name + lod + tex
+}
+
+func plateauDatasetItemSeedFrom(seed plateauDatasetSeed) (items []plateauDatasetItemSeed, warning []string) {
+	cityCode := seed.TargetArea.GetCode().String()
+
+	for i, url := range seed.AssetURLs {
+		name := nameWithoutExt(nameFromURL(url))
+		assetName := seed.Assets[i]
+		if assetName == nil {
+			warning = append(warning, fmt.Sprintf("plateau %s %s: invalid asset name: %s", seed.TargetArea.GetCode(), seed.DatasetType.Code, name))
+			continue
+		}
+		if assetName.Year != seed.Year {
+			warning = append(warning, fmt.Sprintf("plateau %s %s: invalid asset name year: %s: %d should be %d", seed.TargetArea.GetCode(), seed.DatasetType.Code, name, assetName.Year, seed.Year))
+		}
+
+		var item *plateauDatasetItemSeed
+		var w []string
+
+		switch {
+		case assetName.Ex.Normal != nil:
+			item, w = plateauDatasetItemSeedFromNormal(url, assetName.Ex.Normal, seed.LayerNames, cityCode, seed.HideTexture, seed.HideLOD, seed.Dic, seed.DatasetType.Name, seed.UseCategoryAsMVTLayer)
+		case assetName.Ex.Fld != nil:
+			item, w = plateauDatasetItemSeedFromFld(url, assetName.Ex.Fld, seed.Dic, cityCode, seed.HideTexture)
+		default:
+			warning = append(warning, fmt.Sprintf("plateau %s %s[%d]: invalid asset name ex: %s", cityCode, seed.DatasetType.Code, i, name))
+			return
+		}
+
+		if item == nil {
+			continue
+		}
+
+		if size, ok := seed.AssetSizes[url]; ok && size > 0 {
+			item.FileSize = lo.ToPtr(size)
+		}
+
+		warning = append(warning, w...)
+		items = append(items, *item)
+	}
+
+	return
+}
+
+func plateauDatasetItemSeedFromNormal(
+	url string,
+	ex *AssetNameExNormal,
+	layerNames LayerNames,
+	cityCode string,
+	hideTexture bool,
+	hideLOD bool,
+	dic Dic,
+	defaultName string,
+	useCategoryAsMVTLayer bool,
+) (res *plateauDatasetItemSeed, w []string) {
+	if !ex.NoTexture && hideTexture {
+		return
+	}
+
+	// format
+	format := datasetFormatFrom(ex.Format)
+	if format == "" {
+		w = append(w, fmt.Sprintf("plateau %s %s: invalid format: %s", cityCode, ex.Type, ex.Format))
+		return
+	}
+
+	// dic
+	key := ex.DicKey()
+	var name string
+	if key != "" {
+		entry, found := dic.FindEntryOrDefault(ex.Type, ex.DicKey())
+		if !found || entry == nil {
+			w = append(w, fmt.Sprintf("plateau %s %s: unknown dic key: %s", cityCode, ex.Type, key))
+		}
+		name = entry.Description
+	}
+
+	// lod
+	var lod *int
+	var lodex *int
+	if !ex.NoLOD {
+		lod = &ex.LOD
+		if ex.LODEx > 0 {
+			lodex = &ex.LODEx
+		}
+	}
+
+	// notexture
+	var notexture *bool
+	if ex.Format == "3dtiles" {
+		notexture = &ex.NoTexture
+	}
+
+	// layer names
+	layerName := key
+	if useCategoryAsMVTLayer && ex.Name != "" {
+		layerName = ex.Name
+	}
+	layers := layerNames.LayerName([]string{layerName}, ex.LOD, format)
+	if format == plateauapi.DatasetFormatMvt && (len(layers) == 0 || layers[0] == "") {
+		w = append(w, fmt.Sprintf("plateau %s %s: no layer for MVT", cityCode, ex.Type))
+	}
+
+	return &plateauDatasetItemSeed{
+		ID:          key,
+		Name:        name,
+		URL:         assetURLFromFormat(url, format),
+		Format:      format,
+		LOD:         lod,
+		LODEx:       lodex,
+		NoTexture:   notexture,
+		Layers:      layers,
+		HideTexture: hideTexture,
+		HideLOD:     hideLOD,
+		DefaultName: defaultName,
+	}, w
+}
+
+func plateauDatasetItemSeedFromFld(url string, ex *AssetNameExFld, dic Dic, cityCode string, hideTexture bool) (_ *plateauDatasetItemSeed, w []string) {
+	if !ex.NoTexture && hideTexture {
+		return
+	}
+
+	format := datasetFormatFrom(ex.Format)
+	if format == "" {
+		w = append(w, fmt.Sprintf("plateau %s %s: unknown format: %s", cityCode, ex.Type, ex.Format))
+		return
+	}
+
+	key := ex.DatasetItemKey()
+	entry, found := dic.FindEntryOrDefault(ex.Type, ex.DicKey())
+	if !found {
+		w = append(w, fmt.Sprintf("plateau %s %s: unknown dic key: %s", cityCode, ex.Type, ex.DicKey()))
+	}
+	if key == "" || entry == nil {
+		return
+	}
+
+	return &plateauDatasetItemSeed{
+		ID:                  key,
+		Name:                fldItemName(entry),
+		URL:                 assetURLFromFormat(url, format),
+		Format:              format,
+		NoTexture:           &ex.NoTexture,
+		FloodingScale:       toFloodingScale(entry.Scale),
+		FloodingScaleSuffix: lo.EmptyableToPtr(entry.SuffixDescription),
+		HideTexture:         hideTexture,
+	}, w
+}
+
+func fldItemName(e *DicEntry) string {
+	suffix := ""
+	if e.SuffixDescription != "" {
+		suffix = e.SuffixDescription
+	} else if e.Suffix != "" {
+		suffix = e.Suffix
+	}
+	if suffix != "" {
+		suffix = fmt.Sprintf("（%s）", suffix)
+	}
+	return e.Scale + suffix
+}
+
+func toFloodingScale(s string) *plateauapi.FloodingScale {
+	switch s {
+	case "計画規模":
+		fallthrough
+	case "l1":
+		fallthrough
+	case "L1":
+		return lo.ToPtr(plateauapi.FloodingScalePlanned)
+	case "想定最大規模":
+		fallthrough
+	case "l2":
+		fallthrough
+	case "L2":
+		return lo.ToPtr(plateauapi.FloodingScaleExpectedMaximum)
+	}
+	return nil
+}

@@ -1,0 +1,5 @@
+adversary_id: 02be6078-b2b1-47d9-9940-e4784eb6ba48
+name: Sample Test Adversary 
+description: Testing automation for Caldera 
+atomic_ordering:
+- c0da588f-79f0-4263-8998-7496b1a40596 

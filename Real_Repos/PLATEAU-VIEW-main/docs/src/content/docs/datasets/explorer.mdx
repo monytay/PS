@@ -1,0 +1,715 @@
+---
+title: データセット一覧
+description: PLATEAU 配信サービスで提供されている全データセットを絞り込み検索し、配信 URL をコピーできるエクスプローラ
+tableOfContents: false
+---
+
+PLATEAU 配信サービスで現在配信されているすべてのデータセットの一覧です。
+都道府県・種別・形式などで絞り込み、配信 URL をワンクリックでコピーできます。このページは [`GET /datacatalog/plateau-datasets`](/datasets/3d-tiles/#41-通常の-web-api) の内容をブラウザで読み込んで表示しています。実際のデータを地図上で閲覧するには [PLATEAU VIEW](https://plateauview.mlit.go.jp) をご利用ください。
+
+<div id="explorer-root">
+  <div class="explorer-controls">
+    <div class="explorer-search-row">
+      <input id="explorer-search" type="search" placeholder="名称・市区町村・地物型を検索…" autocomplete="off" />
+      <button id="explorer-reset" type="button">リセット</button>
+    </div>
+    <select id="explorer-pref"><option value="">都道府県（すべて）</option></select>
+    <select id="explorer-city"><option value="">市区町村（すべて）</option></select>
+    <select id="explorer-type"><option value="">地物型（すべて）</option></select>
+    <select id="explorer-format">
+      <option value="">形式（すべて）</option>
+    </select>
+    <select id="explorer-lod"><option value="">LOD（すべて）</option></select>
+    <select id="explorer-year"><option value="">整備年度（すべて）</option></select>
+    <select id="explorer-texture">
+      <option value="">テクスチャ（すべて）</option>
+      <option value="true">テクスチャありのみ</option>
+      <option value="false">テクスチャなしのみ</option>
+    </select>
+  </div>
+
+  <div class="explorer-status-row">
+    <div class="explorer-status" id="explorer-status"></div>
+    <label class="explorer-checkbox"><input id="explorer-rawurl" type="checkbox" />Raw URL を表示</label>
+  </div>
+  <div class="explorer-loading" id="explorer-loading" role="status" aria-live="polite">
+    <span class="explorer-spinner" aria-hidden="true"></span>
+    <span>データを読み込んでいます…</span>
+  </div>
+  <div class="explorer-table-wrap" id="explorer-table-wrap" hidden>
+    <table class="explorer-table" id="explorer-table">
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>都道府県</th>
+          <th>市区町村</th>
+          <th>区</th>
+          <th>地物型</th>
+          <th>形式</th>
+          <th>LOD</th>
+          <th>テクスチャ</th>
+          <th>整備年度</th>
+          <th>URL</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<style>{`
+  #explorer-root {
+    --explorer-border: var(--sl-color-gray-5);
+    --explorer-bg: var(--sl-color-gray-7);
+    margin-block: 1.5rem;
+  }
+  .explorer-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+  .explorer-controls > * {
+    margin: 0;
+  }
+  .explorer-controls input[type="search"],
+  .explorer-controls select {
+    box-sizing: border-box;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--explorer-border);
+    border-radius: 0.375rem;
+    background: var(--sl-color-bg);
+    color: var(--sl-color-text);
+    font-size: 0.9rem;
+    min-height: 2.25rem;
+  }
+  .explorer-search-row {
+    flex: 1 1 100%;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .explorer-search-row > * { margin: 0; }
+  .explorer-controls input[type="search"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-left: 2.1rem;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23555' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><path d='m21 21-4.3-4.3'/></svg>");
+    background-repeat: no-repeat;
+    background-position: 0.65rem center;
+    background-size: 0.95rem auto;
+  }
+  :root[data-theme="dark"] .explorer-controls input[type="search"] {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23bbb' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><path d='m21 21-4.3-4.3'/></svg>");
+  }
+  .explorer-controls select {
+    flex: 0 0 auto;
+    width: 12rem;
+    max-width: 100%;
+  }
+  .explorer-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.9rem;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: pointer;
+  }
+  .explorer-controls button {
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--explorer-border);
+    background: var(--sl-color-bg);
+    color: var(--sl-color-text);
+    border-radius: 0.375rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .explorer-controls button:hover { background: var(--sl-color-gray-6); }
+
+  .explorer-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+  }
+  .explorer-status {
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-3);
+  }
+  .explorer-status[data-state="error"] { color: var(--sl-color-red); }
+
+  .explorer-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--explorer-border);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg);
+  }
+  .explorer-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin: 0;
+  }
+  .explorer-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--explorer-bg);
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--explorer-border);
+    white-space: nowrap;
+    z-index: 1;
+  }
+  .explorer-table tbody td {
+    padding: 0.4rem 0.75rem;
+    border-bottom: 1px solid var(--explorer-border);
+    vertical-align: top;
+  }
+  .explorer-table tbody tr:hover { background: var(--sl-color-gray-7); }
+  .explorer-table .url-cell {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    max-width: 28rem;
+  }
+  .explorer-table .url-cell code {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.78rem;
+  }
+  .explorer-table .copy-btn {
+    flex: 0 0 auto;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--explorer-border);
+    background: var(--sl-color-bg);
+    color: var(--sl-color-text);
+    border-radius: 0.3rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+  }
+  .explorer-table .copy-btn:hover { background: var(--sl-color-accent); color: var(--sl-color-accent-high); }
+  .explorer-table .copy-btn.copied { background: var(--sl-color-green); color: white; border-color: transparent; }
+  .explorer-empty {
+    padding: 2rem;
+    text-align: center;
+    color: var(--sl-color-gray-3);
+  }
+  .explorer-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    min-height: 18rem;
+    color: var(--sl-color-gray-3);
+    font-size: 0.95rem;
+  }
+  .explorer-loading[hidden] { display: none; }
+  .explorer-spinner {
+    display: inline-block;
+    width: 2.5rem;
+    height: 2.5rem;
+    border: 3px solid var(--sl-color-gray-5);
+    border-top-color: var(--sl-color-accent-high, var(--sl-color-accent));
+    border-radius: 50%;
+    animation: explorer-spin 0.8s linear infinite;
+  }
+  @keyframes explorer-spin {
+    to { transform: rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .explorer-spinner { animation: none; }
+  }
+`}</style>
+
+<script>{`
+  (() => {
+    const ENDPOINT = 'https://api.plateauview.mlit.go.jp/datacatalog/plateau-datasets';
+    const $ = (id) => document.getElementById(id);
+    const status = $('explorer-status');
+    const loading = $('explorer-loading');
+    const tableWrap = $('explorer-table-wrap');
+    const tbody = $('explorer-table').querySelector('tbody');
+    const search = $('explorer-search');
+    const prefSel = $('explorer-pref');
+    const citySel = $('explorer-city');
+    const typeSel = $('explorer-type');
+    const formatSel = $('explorer-format');
+    const lodSel = $('explorer-lod');
+    const yearSel = $('explorer-year');
+    const textureSel = $('explorer-texture');
+    const rawUrlChk = $('explorer-rawurl');
+    const ALL_JAPAN = '__all_japan__';
+    const PREF_WHOLE = '__pref_whole__';
+    const resetBtn = $('explorer-reset');
+
+    let datasets = [];
+
+    const fillSelect = (sel, values) => {
+      const first = sel.options[0];
+      sel.innerHTML = '';
+      sel.appendChild(first);
+      for (const v of values) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        sel.appendChild(opt);
+      }
+    };
+
+    const uniqSorted = (items, key, cmp) => {
+      const set = new Set();
+      for (const it of items) {
+        const v = it[key];
+        if (v != null && v !== '') set.add(v);
+      }
+      return [...set].sort(cmp || ((a, b) => String(a).localeCompare(String(b), 'ja')));
+    };
+
+    // labelKey と codeKey のペアをコード順で重複排除して取得
+    const uniqPairsByCode = (items, codeKey, labelKey) => {
+      const map = new Map();
+      for (const it of items) {
+        const code = it[codeKey];
+        const label = it[labelKey];
+        if (!code || !label) continue;
+        if (!map.has(code)) map.set(code, label);
+      }
+      return [...map.entries()]
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+        .map(([code, label]) => ({ code, label }));
+    };
+
+    const refreshCityOptions = () => {
+      const pref = prefSel.value;
+      const prev = citySel.value;
+      citySel.innerHTML = '';
+      const first = document.createElement('option');
+      first.value = '';
+      first.textContent = '市区町村（すべて）';
+      citySel.appendChild(first);
+      if (pref === ALL_JAPAN) {
+        // 全国（複合）選択時は市区町村の概念がないので無効化
+        citySel.disabled = true;
+        citySel.value = '';
+        return;
+      }
+      citySel.disabled = false;
+      // 都道府県全体（複合）オプション：選択された都道府県、または全体
+      const hasPrefWhole = datasets.some(d => d._area === 'pref' && (!pref || d.pref === pref));
+      if (hasPrefWhole) {
+        const opt = document.createElement('option');
+        opt.value = PREF_WHOLE;
+        opt.textContent = '— 都道府県全体（複合）';
+        citySel.appendChild(opt);
+      }
+      const filtered = pref ? datasets.filter(d => d.pref === pref) : datasets;
+      const cities = uniqPairsByCode(filtered, 'city_code', 'city');
+      for (const { code, label } of cities) {
+        const opt = document.createElement('option');
+        opt.value = label;
+        opt.textContent = label;
+        citySel.appendChild(opt);
+      }
+      const cityNames = cities.map(c => c.label);
+      if (prev === PREF_WHOLE && hasPrefWhole) citySel.value = PREF_WHOLE;
+      else if (cityNames.includes(prev)) citySel.value = prev;
+    };
+
+    const matches = (d) => {
+      const prefV = prefSel.value;
+      if (prefV === ALL_JAPAN) {
+        if (d._area !== 'all') return false;
+      } else if (prefV) {
+        if (d.pref !== prefV) return false;
+      }
+      const cityV = citySel.value;
+      if (cityV === PREF_WHOLE) {
+        if (d._area !== 'pref') return false;
+      } else if (cityV) {
+        if (d.city !== cityV) return false;
+      }
+      if (typeSel.value && d.type !== typeSel.value) return false;
+      if (formatSel.value) {
+        // Format select values: "CityGML" / "3D Tiles" (any) / "3D Tiles 1.0" / "3D Tiles 1.1" / "MVT".
+        // Versioned 3D Tiles options match only rows whose format_version is known.
+        const m = formatSel.value.match(/^3D Tiles (\\d+\\.\\d+)$/);
+        if (m) {
+          if (d.format !== '3D Tiles' || d.format_version !== m[1]) return false;
+        } else if (d.format !== formatSel.value) {
+          return false;
+        }
+      }
+      if (lodSel.value) {
+        // value 形式: "<lod>" または "<lod>:interior"。空 lod も許容（""、":interior"）
+        const [wantLod, wantTag] = lodSel.value.split(':');
+        if (String(d.lod ?? '') !== wantLod) return false;
+        const isInterior = d.interior === true;
+        if ((wantTag === 'interior') !== isInterior) return false;
+      }
+      if (yearSel.value && String(d.year ?? '') !== yearSel.value) return false;
+      if (textureSel.value === 'true' && d.texture !== true) return false;
+      if (textureSel.value === 'false' && d.texture !== false) return false;
+      const q = search.value.trim().toLowerCase();
+      if (q) {
+        const hay = [d.name, d.pref, d.city, d.ward, d.type, d.type_en, ...(d.feature_types || [])].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    };
+
+    const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+
+    const render = () => {
+      const filtered = datasets.filter(matches);
+      const compositeCount = filtered.filter(d => d._area).length;
+      const citygmlCount = filtered.filter(d => d.format === 'CityGML').length;
+      const realCount = filtered.length - compositeCount - citygmlCount;
+      const fmt = (n) => n.toLocaleString();
+      const breakdown = \`実データセット \${fmt(realCount)} 件・CityGML \${fmt(citygmlCount)} 件・複合タイルセット \${fmt(compositeCount)} 件\`;
+      status.removeAttribute('data-state');
+      status.textContent = filtered.length === datasets.length
+        ? \`全 \${fmt(datasets.length)} 件（\${breakdown}）\`
+        : \`\${fmt(filtered.length)} / \${fmt(datasets.length)} 件（\${breakdown}）\`;
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="explorer-empty">該当するデータセットがありません</td></tr>';
+        return;
+      }
+
+      const useRaw = rawUrlChk.checked;
+      const rows = filtered.map(d => {
+        const url = (useRaw ? d.url : (d.composite_url || d.url)) || '';
+        const escUrl = escapeHtml(url);
+        const typeCell = d.format === 'CityGML' && Array.isArray(d.feature_types) && d.feature_types.length
+          ? d.feature_types.join(', ')
+          : (d.type ?? '');
+        return \`<tr>
+          <td>\${escapeHtml(d.name)}</td>
+          <td>\${escapeHtml(d.pref ?? '')}</td>
+          <td>\${escapeHtml(d.city ?? '')}</td>
+          <td>\${escapeHtml(d.ward ?? '')}</td>
+          <td>\${escapeHtml(typeCell)}</td>
+          <td>\${escapeHtml(d.format === '3D Tiles' && d.format_version ? \`3D Tiles \${d.format_version}\` : (d.format ?? ''))}</td>
+          <td>\${escapeHtml(d.lod ?? '')}</td>
+          <td>\${d.texture === true ? '○' : d.texture === false ? '' : '—'}</td>
+          <td>\${escapeHtml(d.year === 'latest' ? '最新（自治体別）' : (d.year ?? ''))}</td>
+          <td><div class="url-cell"><code title="\${escUrl}">\${escUrl}</code><button class="copy-btn" type="button" data-url="\${escUrl}">コピー</button></div></td>
+        </tr>\`;
+      });
+      tbody.innerHTML = rows.join('');
+    };
+
+    tbody.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.copy-btn');
+      if (!btn) return;
+      const url = btn.getAttribute('data-url');
+      try {
+        await navigator.clipboard.writeText(url);
+        const orig = btn.textContent;
+        btn.textContent = '✓ コピー済み';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+      } catch (err) {
+        btn.textContent = 'コピー失敗';
+      }
+    });
+
+    [prefSel, citySel, typeSel, formatSel, lodSel, yearSel, textureSel, rawUrlChk].forEach(el => {
+      el.addEventListener('input', () => {
+        if (el === prefSel) refreshCityOptions();
+        render();
+      });
+    });
+
+    // 検索入力は IME 変換中の中間状態で render しないように合成イベントを見る
+    let composing = false;
+    search.addEventListener('compositionstart', () => { composing = true; });
+    search.addEventListener('compositionend', () => {
+      composing = false;
+      render();
+    });
+    search.addEventListener('input', () => {
+      if (composing) return;
+      render();
+    });
+
+    resetBtn.addEventListener('click', () => {
+      search.value = '';
+      [prefSel, citySel, typeSel, formatSel, lodSel, yearSel, textureSel].forEach(s => s.value = '');
+      rawUrlChk.checked = false;
+      refreshCityOptions();
+      render();
+    });
+
+    fetch(ENDPOINT, { headers: { Accept: 'application/json' } })
+      .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(data => {
+        const baseDatasets = (data && data.datasets) || [];
+        const citygmls = ((data && data.citygml) || []).map(c => ({
+          id: \`citygml-\${c.id}\`,
+          name: \`\${c.city ?? ''}（CityGML 全地物型）\`,
+          pref: c.pref ?? '',
+          pref_code: c.pref_code ?? '',
+          city: c.city ?? '',
+          city_code: c.city_code ?? '',
+          ward: null,
+          ward_code: null,
+          type: '',
+          type_en: '',
+          url: c.url,
+          composite_url: c.composite_url || null,
+          layers: null,
+          year: c.year,
+          registration_year: c.registration_year,
+          spec: c.spec,
+          format: 'CityGML',
+          lod: '',
+          texture: null,
+          feature_types: c.feature_types || [],
+        }));
+        const composites = ((data && data.composite_tilesets) || []).map(c => ({
+          id: c.id,
+          name: (() => {
+            const scope = c.area === 'all' ? '全国' : \`\${c.pref ?? ''}全域\`;
+            const suffix = c.year === 'latest' ? '・複合・最新' : '・複合';
+            return \`\${c.type ?? ''}（\${scope}\${suffix}）\`;
+          })(),
+          pref: c.pref ?? '',
+          pref_code: c.pref_code ?? '',
+          city: '',
+          city_code: '',
+          ward: null,
+          ward_code: null,
+          type: c.type,
+          type_en: c.type_en,
+          url: c.url,
+          composite_url: c.url,
+          layers: null,
+          year: c.year,
+          registration_year: c.year,
+          spec: '',
+          format: '3D Tiles',
+          // The server now reports the wrapper Asset.version per composite
+          // entry (max of underlying children, defaulting to "1.0"). Use it
+          // as-is so the version filter reflects what Cesium will see.
+          format_version: c.format_version || null,
+          lod: c.lod != null ? String(c.lod) : '',
+          texture: c.texture,
+          interior: c.interior === true ? true : null,
+          _area: c.area,
+        }));
+        const latestDatasets = ((data && data.latest_datasets) || []).map(d => ({
+          id: \`latest-\${d.id}\`,
+          name: \`\${d.name ?? ''}（最新）\`,
+          pref: d.pref ?? '',
+          pref_code: d.pref_code ?? '',
+          city: d.city ?? '',
+          city_code: d.city_code ?? '',
+          ward: d.ward ?? null,
+          ward_code: d.ward_code ?? null,
+          type: d.type,
+          type_en: d.type_en,
+          url: d.url,
+          composite_url: d.url,
+          layers: d.layers || null,
+          year: d.year,
+          registration_year: null,
+          spec: '',
+          format: d.format,
+          format_version: d.format_version || null,
+          lod: d.lod != null ? String(d.lod) : '',
+          texture: d.texture,
+          interior: d.interior === true ? true : null,
+        }));
+        const latestCitygmls = ((data && data.latest_citygml) || []).map(c => ({
+          id: \`latest-citygml-\${c.id}\`,
+          name: \`\${c.city ?? ''}（CityGML 全地物型・最新）\`,
+          pref: c.pref ?? '',
+          pref_code: c.pref_code ?? '',
+          city: c.city ?? '',
+          city_code: c.city_code ?? '',
+          ward: null,
+          ward_code: null,
+          type: '',
+          type_en: '',
+          url: c.url,
+          composite_url: c.url,
+          layers: null,
+          year: c.year,
+          registration_year: null,
+          spec: '',
+          format: 'CityGML',
+          lod: '',
+          texture: null,
+          feature_types: c.feature_types || [],
+        }));
+        datasets = baseDatasets
+          .concat(citygmls)
+          .concat(composites)
+          .concat(latestDatasets)
+          .concat(latestCitygmls);
+
+        // 都道府県セレクト: コード順 + 「日本全国（複合）」を先頭に
+        prefSel.innerHTML = '';
+        const prefFirst = document.createElement('option');
+        prefFirst.value = '';
+        prefFirst.textContent = '都道府県（すべて）';
+        prefSel.appendChild(prefFirst);
+        if (datasets.some(d => d._area === 'all')) {
+          const opt = document.createElement('option');
+          opt.value = ALL_JAPAN;
+          opt.textContent = '— 日本全国（複合）';
+          prefSel.appendChild(opt);
+        }
+        for (const { label } of uniqPairsByCode(datasets, 'pref_code', 'pref')) {
+          const opt = document.createElement('option');
+          opt.value = label;
+          opt.textContent = label;
+          prefSel.appendChild(opt);
+        }
+        // 地物型: 各都市内の出現順 (= API側の標準順) の中央値で並べる
+        {
+          // 都市ごとの type_en 出現順を作る
+          const cityToTypes = new Map();
+          const typeName = new Map();
+          for (const d of baseDatasets) {
+            if (!d.type_en || !d.city_code) continue;
+            if (d.type) typeName.set(d.type_en, d.type);
+            let arr = cityToTypes.get(d.city_code);
+            if (!arr) { arr = []; cityToTypes.set(d.city_code, arr); }
+            if (!arr.includes(d.type_en)) arr.push(d.type_en);
+          }
+          const indices = new Map();
+          for (const arr of cityToTypes.values()) {
+            arr.forEach((t, i) => {
+              if (!indices.has(t)) indices.set(t, []);
+              indices.get(t).push(i);
+            });
+          }
+          const median = (xs) => {
+            const s = [...xs].sort((a, b) => a - b);
+            return s.length % 2 ? s[(s.length - 1) >> 1] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+          };
+          const types = [...typeName.entries()]
+            .map(([en, name]) => ({ en, name, key: median(indices.get(en) || [Infinity]) }))
+            .sort((a, b) => a.key - b.key || a.en.localeCompare(b.en));
+          typeSel.innerHTML = '';
+          const first = document.createElement('option');
+          first.value = '';
+          first.textContent = '地物型（すべて）';
+          typeSel.appendChild(first);
+          for (const { name } of types) {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            typeSel.appendChild(opt);
+          }
+        }
+        {
+          // (lod, interior) の組を列挙。interior=true の組み合わせは
+          // 該当データが存在するときだけ追加する。
+          const seen = new Set();
+          for (const d of datasets) {
+            const lod = d.lod ?? '';
+            if (lod === '' && d.interior !== true) continue; // 空 LOD で非 interior は出さない
+            const tag = d.interior === true ? ':interior' : '';
+            seen.add(\`\${lod}\${tag}\`);
+          }
+          const opts = [...seen].sort((a, b) => {
+            const [la, ta] = a.split(':');
+            const [lb, tb] = b.split(':');
+            const lc = String(la).localeCompare(String(lb), 'ja', { numeric: true });
+            if (lc !== 0) return lc;
+            return (ta ? 1 : 0) - (tb ? 1 : 0);
+          });
+          const first = lodSel.options[0];
+          lodSel.innerHTML = '';
+          lodSel.appendChild(first);
+          for (const v of opts) {
+            const [lod, tag] = v.split(':');
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = tag === 'interior' ? \`\${lod}（屋内）\` : lod;
+            lodSel.appendChild(opt);
+          }
+        }
+        {
+          // year: composites は文字列、baseDatasets は数値で来るので String 化して dedup。
+          // "latest" を先頭、その後は数値降順。
+          const set = new Set();
+          for (const d of datasets) {
+            if (d.year != null && d.year !== '') set.add(String(d.year));
+          }
+          const years = [...set].sort((a, b) => {
+            if (a === 'latest' && b !== 'latest') return -1;
+            if (a !== 'latest' && b === 'latest') return 1;
+            if (a === 'latest' && b === 'latest') return 0;
+            return Number(b) - Number(a);
+          });
+          const first = yearSel.options[0];
+          yearSel.innerHTML = '';
+          yearSel.appendChild(first);
+          for (const v of years) {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v === 'latest' ? '最新（自治体別）' : v;
+            yearSel.appendChild(opt);
+          }
+        }
+        {
+          // Format select options derived from data. "3D Tiles" matches all
+          // 3D Tiles regardless of version; versioned variants are added only
+          // when rows with that format_version actually exist.
+          const baseFormats = new Set();
+          const tilesVersions = new Set();
+          for (const d of datasets) {
+            if (!d.format) continue;
+            baseFormats.add(d.format);
+            if (d.format === '3D Tiles' && d.format_version) {
+              tilesVersions.add(d.format_version);
+            }
+          }
+          const order = ['CityGML', '3D Tiles', 'MVT'];
+          const opts = [];
+          for (const f of order) {
+            if (!baseFormats.has(f)) continue;
+            opts.push({ value: f, label: f });
+            if (f === '3D Tiles') {
+              for (const v of [...tilesVersions].sort()) {
+                opts.push({ value: \`3D Tiles \${v}\`, label: \`3D Tiles \${v}\` });
+              }
+            }
+          }
+          const first = formatSel.options[0];
+          formatSel.innerHTML = '';
+          formatSel.appendChild(first);
+          for (const o of opts) {
+            const opt = document.createElement('option');
+            opt.value = o.value;
+            opt.textContent = o.label;
+            formatSel.appendChild(opt);
+          }
+        }
+        refreshCityOptions();
+        loading.hidden = true;
+        tableWrap.hidden = false;
+        render();
+      })
+      .catch(err => {
+        loading.hidden = true;
+        status.setAttribute('data-state', 'error');
+        status.textContent = \`データの取得に失敗しました: \${err.message}\`;
+      });
+  })();
+`}</script>

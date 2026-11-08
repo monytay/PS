@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PLATEAU Terrain Viewer</title>
+  <link
+    href="https://cesium.com/downloads/cesiumjs/releases/1.127/Build/Cesium/Widgets/widgets.css"
+    rel="stylesheet"
+  />
+  <style>
+    html, body, #cesium { width: 100%; height: 100%; margin: 0; padding: 0; }
+    .toolbar {
+      position: absolute; top: 8px; left: 8px; z-index: 1000;
+      background: rgba(24, 24, 24, 0.85); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-family: sans-serif;
+      display: flex; gap: 8px; align-items: center; font-size: 12px;
+    }
+    .toolbar a { color: #6cf; text-decoration: none; }
+    .toolbar a:hover { text-decoration: underline; }
+    .toolbar select, .toolbar button { font-size: 12px; }
+    .toolbar button.active { background: #6cf; color: #000; }
+    .sep { opacity: 0.4; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <a href="/">← Map View</a>
+    <span class="sep">|</span>
+    <label>Imagery:</label>
+    <select id="imagery"></select>
+    <label id="demSourceLabel" style="display:none;">DEM:</label>
+    <select id="demSource" style="display:none;"></select>
+    <label>Geoid:</label>
+    <select id="geoid">
+      <option value="gsigeo2011">GSIGEO2011（日本域）</option>
+      <option value="jpgeo2024">JPGEO2024（日本域+海域）</option>
+      <option value="jpgeo2024-hrefconv">JPGEO2024 + Hrefconv（日本域のみ）</option>
+      <option value="none">なし（オルソ高のまま）</option>
+    </select>
+    <button id="flyChiyoda">千代田区へ</button>
+    <span class="sep">|</span>
+    <button id="terrainCompare" title="Toggle between PLATEAU terrain (default) and the older Cesium Ion-hosted tileset for visual A/B comparison">旧テラインと比較</button>
+    <button id="inspectorToggle" title="Show source bounds (incl. DEM overlays) on the globe">Inspector</button>
+    <button id="tileGridToggle" title="Overlay TMS-Geodetic terrain-tile boundaries with z/x/y labels">Tile grid</button>
+  </div>
+  <div id="cesium"></div>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.127/Build/Cesium/Cesium.js"></script>
+  <script>
+    Cesium.Ion.defaultAccessToken = null;
+
+    // ── URL state ──────────────────────────────────────────────────────
+    // Persist UI state (camera, imagery, DEM, geoid, toggles) to the query
+    // string so reloads and shared links preserve the view. Cesium has no
+    // built-in URL-hash sync analogous to MapLibre's `hash: true`, so we wire
+    // camera persistence by hand on `moveEnd`.
+    const urlParams = new URLSearchParams(window.location.search);
+    function setUrlParam(key, value) {
+      const p = new URLSearchParams(window.location.search);
+      if (value === null || value === undefined || value === '') {
+        p.delete(key);
+      } else {
+        p.set(key, String(value));
+      }
+      const qs = p.toString();
+      const next = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
+      window.history.replaceState(null, '', next);
+    }
+    const readBoolParam = (key, defaultValue) => {
+      const v = urlParams.get(key);
+      if (v === null) return defaultValue;
+      return v === '1';
+    };
+    const writeBoolParam = (key, value, defaultValue) => {
+      if (value === defaultValue) setUrlParam(key, '');
+      else setUrlParam(key, value ? '1' : '0');
+    };
+
+    // ── Imagery options ────────────────────────────────────────────────
+    // GSI (国土地理院) is the default base map and stays default — the
+    // outline-style tiles are easier to read against 3D terrain than
+    // imagery overlays. Configured `/tiles/<name>/...` sources are added
+    // to the dropdown after fetch but the selection stays on GSI; the
+    // user picks one explicitly when they want it.
+    const imagerySelect = document.getElementById('imagery');
+
+    const gsiOption = {
+      id: 'gsi',
+      label: '地理院（標準）',
+      build: () =>
+        new Cesium.UrlTemplateImageryProvider({
+          url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
+          credit:
+            '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>',
+          maximumLevel: 18,
+        }),
+    };
+    const osmOption = {
+      id: 'osm',
+      label: 'OSM',
+      build: () =>
+        new Cesium.OpenStreetMapImageryProvider({
+          url: 'https://tile.openstreetmap.org/',
+          credit:
+            '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
+        }),
+    };
+    const options = [gsiOption, osmOption];
+
+    function rebuildImagerySelect(selectedId) {
+      imagerySelect.innerHTML = '';
+      for (const opt of options) {
+        const el = document.createElement('option');
+        el.value = opt.id;
+        el.textContent = opt.label;
+        imagerySelect.appendChild(el);
+      }
+      if (selectedId) {
+        imagerySelect.value = selectedId;
+      }
+    }
+    rebuildImagerySelect(gsiOption.id);
+
+    // ── Cesium init ────────────────────────────────────────────────────
+    // Start without a base layer; we add one synchronously below so that
+    // setImagery has a single, well-defined entry to swap.
+    const viewer = new Cesium.Viewer('cesium', {
+      baseLayer: false,
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false,
+      geocoder: false,
+      homeButton: false,
+      navigationHelpButton: false,
+      sceneModePicker: false,
+      // Enable infoBox + selectionIndicator so clicking a 3D Tiles
+      // feature (LOD1 building) opens its attribute table — handy when
+      // sanity-checking PLATEAU data in this debug viewer.
+      infoBox: true,
+      selectionIndicator: true,
+      // Force continuous rendering. requestRenderMode would otherwise
+      // skip frames while the camera is idle, which hides issues that
+      // only show up while terrain LOD streams in and makes the tile-
+      // grid overlay below update only on explicit `scene.requestRender`
+      // — not what we want when eyeballing terrain seams.
+      requestRenderMode: false,
+    });
+
+    // Fixed clock at 10:00 JST so lighting & shadows are consistent.
+    const fixedTime = Cesium.JulianDate.fromIso8601('2025-03-21T01:00:00Z');
+    viewer.clock.currentTime = fixedTime.clone();
+    viewer.clock.startTime = fixedTime.clone();
+    viewer.clock.stopTime = fixedTime.clone();
+    viewer.clock.clockRange = Cesium.ClockRange.CLAMPED;
+    viewer.clock.shouldAnimate = false;
+
+    viewer.scene.globe.enableLighting = true;
+    viewer.shadows = true;
+    viewer.scene.globe.shadows = Cesium.ShadowMode.RECEIVE_ONLY;
+    viewer.scene.globe.depthTestAgainstTerrain = true;
+
+    function setImagery(id) {
+      const opt = options.find((o) => o.id === id) || options[0];
+      const layers = viewer.imageryLayers;
+      // Drop everything first, then add the new provider. The previous
+      // implementation added-then-removed to avoid a blank-frame flash
+      // but that left stale layers around when switching back-and-forth
+      // between GSI and a /tiles source — subsequent imagery picks
+      // wouldn't re-render. The brief flash is fine for a debug viewer.
+      layers.removeAll(true);
+      layers.addImageryProvider(opt.build());
+    }
+    // The initial imagery may not be available yet (e.g. a `tiles:foo`
+    // imagery from a CMS source that loads asynchronously below). Start with
+    // GSI and re-apply once the dropdown is rebuilt with the full option set.
+    const initialImagery = urlParams.get('imagery') || gsiOption.id;
+    setImagery(options.some((o) => o.id === initialImagery) ? initialImagery : gsiOption.id);
+    imagerySelect.addEventListener('change', (e) => {
+      setImagery(e.target.value);
+      setUrlParam('imagery', e.target.value === gsiOption.id ? '' : e.target.value);
+    });
+
+    // Cache of /tiles/sources.json — drives both the imagery dropdown (raster
+    // sources only) and the DEM picker (DEM sources only) below.
+    const sourcesPromise = fetch('/tiles/sources.json')
+      .then((r) => (r.ok ? r.json() : { sources: [] }))
+      .catch(() => ({ sources: [] }));
+
+    // Append raster /tiles/<name> sources to the dropdown but keep GSI selected.
+    // DEM-typed sources are excluded — they aren't addressable under /tiles/<name>
+    // and would 404 the imagery layer.
+    sourcesPromise
+      .then((data) => {
+        const tilesOptions = (data.sources || [])
+          .filter((src) => src.type !== 'dem')
+          .map((src) => ({
+            id: `tiles:${src.name}`,
+            label: src.name,
+            build: () =>
+              new Cesium.UrlTemplateImageryProvider({
+                url: `/tiles/${src.name}/{z}/{x}/{y}.png`,
+                credit:
+                  '<a href="https://www.mlit.go.jp/plateau/" target="_blank">PLATEAU</a>',
+              }),
+          }));
+        if (tilesOptions.length === 0) return;
+        // Insert after GSI so GSI stays at the top.
+        options.splice(1, 0, ...tilesOptions);
+        // Now that the full option set is known, apply the persisted choice if
+        // it's available — otherwise stay on the current (GSI) selection.
+        const persisted = urlParams.get('imagery');
+        const valid = persisted && options.some((o) => o.id === persisted);
+        rebuildImagerySelect(valid ? persisted : imagerySelect.value || gsiOption.id);
+        if (valid && persisted !== imagerySelect.value) setImagery(persisted);
+      });
+
+    // ── Terrain ────────────────────────────────────────────────────────
+    // Two providers: the live PLATEAU `/terrain` endpoint and a frozen
+    // legacy tileset on Cesium Ion. The compare button toggles between
+    // them so visual regressions in the new pipeline are easy to spot
+    // (e.g. nodata pits, coverage gaps, edge artifacts).
+    const CESIUM_ION_TOKEN =
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJiODVhMmQ5OS1hOWZjLTQ3YmYtODlmNi1lNWUwY2MwOGUxYTMiLCJpZCI6MTQ5ODk3LCJpYXQiOjE2ODc5MzQ3NDN9.OG0mc3i7ZxGwHQjlMv3TRjiOvKWpzxglxmJRaUIykTY';
+    const LEGACY_ASSET_ID = 3258112;
+    Cesium.Ion.defaultAccessToken = CESIUM_ION_TOKEN;
+
+    const geoidSelect = document.getElementById('geoid');
+    const demSourceSelect = document.getElementById('demSource');
+    const demSourceLabel = document.getElementById('demSourceLabel');
+    const terrainCompareBtn = document.getElementById('terrainCompare');
+    let usingLegacyTerrain = readBoolParam('legacy', false);
+    const initialGeoid = urlParams.get('geoid');
+    if (initialGeoid) geoidSelect.value = initialGeoid;
+    // Selected DEM source name. Empty string = the default `/terrain` route
+    // (which the tile server aliases to source name "dem"). Anything else
+    // becomes `/terrain/{name}`.
+    let demSourceName = urlParams.get('dem') || '';
+
+    // Mirror sources (type === 'qmesh-mirror') don't honor ?geoid= — the
+    // bytes were pre-rendered against a fixed geoid by the upstream crawler —
+    // so we suppress the query parameter and grey out the geoid picker when
+    // a mirror is selected.
+    const mirrorSources = new Set();
+
+    function applyTerrain() {
+      // Use scene.setTerrain(new Terrain(promise)) for both providers.
+      // Direct `viewer.terrainProvider = await provider` worked one-way
+      // but didn't reliably restore PLATEAU terrain after switching to
+      // the Ion legacy asset — the wrapped Terrain swap is the modern,
+      // idempotent API and handles cleanup of the previous provider.
+      let providerPromise;
+      if (usingLegacyTerrain) {
+        providerPromise = Cesium.CesiumTerrainProvider.fromIonAssetId(
+          LEGACY_ASSET_ID,
+        );
+      } else {
+        const url = demSourceName ? `/terrain/${demSourceName}` : '/terrain';
+        const isMirror = mirrorSources.has(demSourceName);
+        const queryParameters = isMirror ? {} : { geoid: geoidSelect.value };
+        const resource = new Cesium.Resource({ url, queryParameters });
+        providerPromise = Cesium.CesiumTerrainProvider.fromUrl(resource, {
+          requestVertexNormals: true,
+          requestWaterMask: false,
+        });
+        geoidSelect.disabled = isMirror;
+      }
+      viewer.scene.setTerrain(new Cesium.Terrain(providerPromise));
+    }
+    applyTerrain();
+    geoidSelect.addEventListener('change', () => {
+      setUrlParam('geoid', geoidSelect.value === 'gsigeo2011' ? '' : geoidSelect.value);
+      applyTerrain();
+    });
+    demSourceSelect.addEventListener('change', (e) => {
+      demSourceName = e.target.value;
+      setUrlParam('dem', demSourceName);
+      applyTerrain();
+    });
+
+    // Populate the DEM source dropdown from /tiles/sources.json. Includes
+    // both DEM-generated sources and the pre-rendered qmesh mirror (if
+    // configured server-side). Only shows when there's more than one entry —
+    // otherwise just visual noise for a single-source setup.
+    sourcesPromise
+      .then((data) => {
+        const entries = (data.sources || [])
+          .filter((src) => src.type === 'dem' || src.type === 'qmesh-mirror')
+          .sort((a, b) => a.name.localeCompare(b.name));
+        if (entries.length < 2) return;
+        mirrorSources.clear();
+        for (const src of entries) {
+          if (src.type === 'qmesh-mirror') mirrorSources.add(src.name);
+        }
+        demSourceSelect.innerHTML = '';
+        for (const src of entries) {
+          const opt = document.createElement('option');
+          // Empty value for "dem" → hits the no-name `/terrain` route, which
+          // the server already aliases to source "dem". Keeps the URL the same
+          // as the legacy default for the common case.
+          opt.value = src.name === 'dem' ? '' : src.name;
+          opt.textContent =
+            src.type === 'qmesh-mirror' ? `${src.name} (mirror)` : src.name;
+          demSourceSelect.appendChild(opt);
+        }
+        // Apply the persisted DEM if it's available; otherwise clear and
+        // re-apply terrain so any stale ?dem value doesn't keep hitting a
+        // 404 endpoint.
+        const names = entries.map((s) => s.name);
+        const exists = names.includes(demSourceName || 'dem');
+        if (!exists) {
+          demSourceName = '';
+          setUrlParam('dem', '');
+        }
+        demSourceSelect.value = demSourceName;
+        demSourceLabel.style.display = '';
+        demSourceSelect.style.display = '';
+        if (demSourceName) applyTerrain();
+      });
+    function applyLegacyState() {
+      terrainCompareBtn.classList.toggle('active', usingLegacyTerrain);
+      terrainCompareBtn.textContent = usingLegacyTerrain
+        ? 'PLATEAUに戻す'
+        : '旧テラインと比較';
+      // Geoid is irrelevant for the legacy tileset — it bakes its own
+      // height model. Disable the dropdown to avoid confusion.
+      geoidSelect.disabled = usingLegacyTerrain;
+    }
+    if (usingLegacyTerrain) applyLegacyState();
+    terrainCompareBtn.addEventListener('click', () => {
+      usingLegacyTerrain = !usingLegacyTerrain;
+      writeBoolParam('legacy', usingLegacyTerrain, false);
+      applyLegacyState();
+      applyTerrain();
+    });
+
+    // ── 3D Tiles LOD1 (all cities) for grounding sanity check ─────────
+    const ALL_LOD1_URL =
+      'https://api.plateauview.mlit.go.jp/datacatalog/3dtiles/all-bldg-lod1-latest/tileset.json';
+    (async () => {
+      try {
+        const tileset = await Cesium.Cesium3DTileset.fromUrl(ALL_LOD1_URL, {
+          shadows: Cesium.ShadowMode.ENABLED,
+        });
+        viewer.scene.primitives.add(tileset);
+      } catch (err) {
+        console.error('Failed to load LOD1 tileset:', err);
+      }
+    })();
+
+    // ── Camera ─────────────────────────────────────────────────────────
+    // Default viewport over central Tokyo. `?cam=lng,lat,height,heading,pitch,roll`
+    // overrides on load; subsequent camera changes write the param back so a
+    // reload restores exactly where the user left off.
+    const defaultCam = {
+      destination: Cesium.Cartesian3.fromDegrees(139.753, 35.68, 3000),
+      orientation: {
+        heading: Cesium.Math.toRadians(0.0),
+        pitch: Cesium.Math.toRadians(-35.0),
+        roll: 0.0,
+      },
+    };
+    function parseCamParam(s) {
+      if (!s) return null;
+      const parts = s.split(',').map(Number);
+      if (parts.length < 5 || parts.some((n) => !Number.isFinite(n))) return null;
+      const [lng, lat, height, heading, pitch, roll = 0] = parts;
+      return {
+        destination: Cesium.Cartesian3.fromDegrees(lng, lat, height),
+        orientation: {
+          heading: Cesium.Math.toRadians(heading),
+          pitch: Cesium.Math.toRadians(pitch),
+          roll: Cesium.Math.toRadians(roll),
+        },
+      };
+    }
+    viewer.camera.setView(parseCamParam(urlParams.get('cam')) || defaultCam);
+    // Persist on every camera-stop. `moveEnd` fires after both user-driven
+    // moves and programmatic ones — we accept the redundant writes here since
+    // they're cheap (`replaceState` of a short URL).
+    const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
+    // Cesium normalises heading/roll to (0, 2π], so after `setView` with a
+    // zero angle the getter returns ~2π → 360°. Wrap into [-180, 180) for
+    // compact, human-readable URLs.
+    const wrap180 = (deg) => {
+      const w = ((deg + 180) % 360 + 360) % 360 - 180;
+      return Object.is(w, -0) ? 0 : w;
+    };
+    viewer.camera.moveEnd.addEventListener(() => {
+      const c = viewer.camera;
+      const carto = Cesium.Cartographic.fromCartesian(c.positionWC);
+      const cam = [
+        round(Cesium.Math.toDegrees(carto.longitude), 6),
+        round(Cesium.Math.toDegrees(carto.latitude), 6),
+        Math.round(carto.height),
+        round(wrap180(Cesium.Math.toDegrees(c.heading)), 2),
+        round(wrap180(Cesium.Math.toDegrees(c.pitch)), 2),
+        round(wrap180(Cesium.Math.toDegrees(c.roll)), 2),
+      ].join(',');
+      setUrlParam('cam', cam);
+    });
+    document.getElementById('flyChiyoda').addEventListener('click', () => {
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(139.753, 35.68, 3000),
+        orientation: {
+          heading: Cesium.Math.toRadians(0.0),
+          pitch: Cesium.Math.toRadians(-35.0),
+          roll: 0.0,
+        },
+      });
+    });
+
+    // ── Inspector: source bounds overlay ──────────────────────────────
+    // Draws each configured source's `bounds` (from /tiles/sources.json)
+    // as a translucent rectangle on the globe so DEM overlay coverage —
+    // which otherwise only manifests as terrain elevation — is visible.
+    const inspectorPalette = [
+      '#e6194b', '#3cb44b', '#ffe119', '#4363d8',
+      '#f58231', '#911eb4', '#46f0f0', '#f032e6',
+      '#bcf60c', '#fabebe', '#008080', '#e6beff',
+      '#9a6324', '#fffac8', '#800000', '#aaffc3',
+    ];
+    const inspectorEntities = [];
+    const inspectorBtn = document.getElementById('inspectorToggle');
+    let inspectorEnabled = readBoolParam('inspector', false);
+
+    async function buildInspector() {
+      const data = await fetch('/tiles/sources.json')
+        .then((r) => (r.ok ? r.json() : { sources: [] }))
+        .catch(() => ({ sources: [] }));
+      // Color is assigned per source (not per layer), so dem[0]/dem[1]/…
+      // share one color and the eye groups them as a single source.
+      const colorBySource = new Map();
+      for (const src of data.sources || []) {
+        if (!colorBySource.has(src.name)) {
+          colorBySource.set(
+            src.name,
+            inspectorPalette[colorBySource.size % inspectorPalette.length],
+          );
+        }
+        const color = colorBySource.get(src.name);
+        for (const layer of src.layers || []) {
+          if (!layer.bounds) continue;
+          const [w, s, e, n] = layer.bounds;
+          const css = Cesium.Color.fromCssColorString(color);
+          const zoom = (layer.min_zoom != null && layer.max_zoom != null)
+            ? `z${layer.min_zoom}-${layer.max_zoom}`
+            : (layer.max_zoom != null ? `z≤${layer.max_zoom}` : '');
+          const label = `${src.name}[${layer.layer_index}] ${layer.layer_type}${zoom ? ' ' + zoom : ''}`;
+          // Translucent fill. Cannot clamp to terrain (Cesium rectangles
+          // sit at fixed `height`); the polyline outline below handles the
+          // terrain-following silhouette.
+          const rect = viewer.entities.add({
+            name: label,
+            rectangle: {
+              coordinates: Cesium.Rectangle.fromDegrees(w, s, e, n),
+              material: css.withAlpha(0.15),
+              height: 0,
+              outline: false,
+            },
+          });
+          inspectorEntities.push(rect);
+          // Outline as a polyline clamped to ground so it follows terrain.
+          const outline = viewer.entities.add({
+            polyline: {
+              positions: Cesium.Cartesian3.fromDegreesArray([
+                w, s, e, s, e, n, w, n, w, s,
+              ]),
+              width: 2,
+              material: css,
+              clampToGround: true,
+            },
+          });
+          inspectorEntities.push(outline);
+          // Label at the NW corner of the bbox.
+          const labelEntity = viewer.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(w, n),
+            label: {
+              text: label,
+              font: '12px sans-serif',
+              fillColor: css,
+              outlineColor: Cesium.Color.WHITE,
+              outlineWidth: 2,
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              horizontalOrigin: Cesium.HorizontalOrigin.LEFT,
+              pixelOffset: new Cesium.Cartesian2(4, -4),
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+          });
+          inspectorEntities.push(labelEntity);
+        }
+      }
+    }
+
+    function clearInspector() {
+      for (const e of inspectorEntities) viewer.entities.remove(e);
+      inspectorEntities.length = 0;
+    }
+
+    async function applyInspector() {
+      inspectorBtn.classList.toggle('active', inspectorEnabled);
+      if (inspectorEnabled) {
+        await buildInspector();
+      } else {
+        clearInspector();
+      }
+    }
+    inspectorBtn.addEventListener('click', async () => {
+      inspectorEnabled = !inspectorEnabled;
+      writeBoolParam('inspector', inspectorEnabled, false);
+      await applyInspector();
+    });
+    if (inspectorEnabled) applyInspector();
+
+    // ── Tile-grid overlay (TMS Geodetic) ──────────────────────────────
+    // Cesium's built-in `TileCoordinatesImageryProvider` overlays a hollow
+    // rectangle + z/x/y label on every tile in whatever scheme the globe
+    // is using — for our Cesium globe that's `GeographicTilingScheme`,
+    // i.e. the same TMS-Geodetic addressing as /terrain/{z}/{x}/{y}.terrain.
+    // No manual viewport math, no per-frame polyline rebuild.
+    //
+    // Default colour is a thin Cesium-cyan that disappears over GSI's
+    // pale base; we override to hot magenta + thicker outline so the grid
+    // pops over imagery and shaded terrain alike.
+    const tileGridBtn = document.getElementById('tileGridToggle');
+    let tileGridLayer = null;
+    function applyTileGrid(enable) {
+      tileGridBtn.classList.toggle('active', enable);
+      if (enable && !tileGridLayer) {
+        const provider = new Cesium.TileCoordinatesImageryProvider({
+          color: Cesium.Color.fromCssColorString('#ff00aa'),
+        });
+        tileGridLayer = viewer.imageryLayers.addImageryProvider(provider);
+      } else if (!enable && tileGridLayer) {
+        viewer.imageryLayers.remove(tileGridLayer, true);
+        tileGridLayer = null;
+      }
+    }
+    tileGridBtn.addEventListener('click', () => {
+      const willEnable = tileGridLayer == null;
+      writeBoolParam('tileGrid', willEnable, false);
+      applyTileGrid(willEnable);
+    });
+    if (readBoolParam('tileGrid', false)) applyTileGrid(true);
+  </script>
+</body>
+</html>
