@@ -47,7 +47,7 @@ def unwrap(value):
         value.startswith("${var.") or
         value.startswith("var.") or
         value.startswith("${local.") or
-        value.startswith("local.")
+        value.startswith("local.") 
     ):
         return UNKNOWN
     if isinstance(value, str) and value.lower() == "true":

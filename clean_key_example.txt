@@ -1,0 +1,9 @@
+{
+    "resource" : {
+        'trail': {
+            "name":"bad_trail",
+            "is_multi_region_trail": "False",
+            "enable_logging": "${var.logging}"
+        }
+    }
+}

@@ -9,6 +9,6 @@ checkov -d Real_Repos/AutomatedEmulation-master --check CKV_AWS_10,CKV_AWS_53,CK
 checkov -d Real_Repos/terraform-aws-acf-account-hardening-main --check CKV_AWS_10,CKV_AWS_53,CKV_AWS_16,CKV_AWS_17,CKV_AWS_67,CKV_AWS_24 --framework terraform
 
 -----Checkov Phase 2.-------
-checkov -d Real_Repos/PLATEAU-VIEW-main --check CKV_AWS_10,CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56,CKV_AWS_16,CKV_AWS_17,CKV_AWS_67,CKV_AWS_24,CKV_AWS_25 --framework terraform
-checkov -d Real_Repos/AutomatedEmulation-master --check CKV_AWS_10,CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56,CKV_AWS_16,CKV_AWS_17,CKV_AWS_67,CKV_AWS_24,CKV_AWS_25 --framework terraform
-checkov -d Real_Repos/terraform-aws-acf-account-hardening-main --check CKV_AWS_10,CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56,CKV_AWS_16,CKV_AWS_17,CKV_AWS_67,CKV_AWS_24,CKV_AWS_25 --framework terraform
+python -m checkov.main -d Real_Repos/PLATEAU-VIEW-main --check CKV_AWS_10,CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56,CKV_AWS_16,CKV_AWS_17,CKV_AWS_67,CKV_AWS_24,CKV_AWS_25 --framework terraform
+python -m checkov.main -d Real_Repos/AutomatedEmulation-master --check CKV_AWS_10,CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56,CKV_AWS_16,CKV_AWS_17,CKV_AWS_67,CKV_AWS_24,CKV_AWS_25 --framework terraform
+python -m checkov.main -d Real_Repos/terraform-aws-acf-account-hardening-main --check CKV_AWS_10,CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56,CKV_AWS_16,CKV_AWS_17,CKV_AWS_67,CKV_AWS_24,CKV_AWS_25 --framework terraform
