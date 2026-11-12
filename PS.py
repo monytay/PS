@@ -446,3 +446,6 @@ if __name__ == "__main__":
     print(f"\n--- SCAN SUMMARY ---")
     print(f"Vulnerabilities found : {total_vulnerabilities}")
     print(f"Variables found       : {total_unknown}")
+
+    #This is a new line to test branches
+    
